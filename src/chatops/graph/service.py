@@ -22,12 +22,13 @@ class GraphResult:
 
 
 class GraphService:
-    def __init__(self, llm_service, registry_service, adapter_service) -> None:
+    def __init__(self, llm_service, registry_service, adapter_service, resolver_service=None) -> None:
         self.workflow = GraphWorkflow(
             WorkflowNodes(
                 llm_service=llm_service,
                 registry_service=registry_service,
                 adapter_service=adapter_service,
+                resolver_service=resolver_service or _NullResolverService(),
             )
         ).compile()
 
@@ -89,3 +90,8 @@ class GraphService:
             final_response=result.get("final_response"),
             selected_operation_ids=list(result.get("selected_operation_ids", [])),
         )
+
+
+class _NullResolverService:
+    def resolve(self, operation, message_text: str) -> dict[str, object]:
+        return {}
