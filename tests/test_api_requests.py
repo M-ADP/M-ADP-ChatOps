@@ -44,6 +44,19 @@ class StubGraphService:
             selected_operation_ids=["project.create"],
         )
 
+    def resume_request(self, request_id: str, session_id: str, user_id: str, message_text: str) -> GraphResult:
+        return GraphResult(
+            request_id=request_id,
+            session_id=session_id,
+            user_id=user_id,
+            status="completed",
+            request_type="command",
+            requires_approval=False,
+            intent="execute_command",
+            final_response="명령 실행 완료",
+            selected_operation_ids=["project.create"],
+        )
+
 
 @pytest.fixture()
 def client(db_session):
@@ -179,3 +192,50 @@ def test_create_request_returns_processing_status(client: TestClient) -> None:
 
     assert response.status_code == 202
     assert response.json()["status"] in {"processing", "pending_approval"}
+
+
+def test_approve_request_resumes_pending_command(client: TestClient) -> None:
+    session = client.post(
+        "/api/v1/sessions",
+        headers={"X-User-Id": "user-1"},
+        json={},
+    ).json()
+    request = client.post(
+        f"/api/v1/sessions/{session['session_id']}/requests",
+        headers={"X-User-Id": "user-1"},
+        json={"message": "프로젝트 생성해줘"},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/sessions/{session['session_id']}/requests/{request['request_id']}/approve",
+        headers={"X-User-Id": "user-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+
+
+def test_reject_request_emits_rejected_event(client: TestClient) -> None:
+    session = client.post(
+        "/api/v1/sessions",
+        headers={"X-User-Id": "user-1"},
+        json={},
+    ).json()
+    request = client.post(
+        f"/api/v1/sessions/{session['session_id']}/requests",
+        headers={"X-User-Id": "user-1"},
+        json={"message": "프로젝트 생성해줘"},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/sessions/{session['session_id']}/requests/{request['request_id']}/reject",
+        headers={"X-User-Id": "user-1"},
+    )
+    stream_response = client.get(
+        f"/api/v1/sessions/{session['session_id']}/requests/{request['request_id']}/stream",
+        headers={"X-User-Id": "user-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+    assert "event: approval.rejected" in stream_response.text
