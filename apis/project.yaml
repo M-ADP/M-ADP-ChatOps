@@ -1,0 +1,1607 @@
+openapi: 3.1.0
+info:
+  title: Default module
+  description: ''
+  version: 1.0.0
+tags:
+  - name: projects
+paths:
+  /projects:
+    post:
+      summary: Create Project Endpoint
+      deprecated: false
+      description: ''
+      operationId: create_project_endpoint_projects_post
+      tags:
+        - projects
+      parameters:
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreate'
+            example:
+              name: my-project
+              max_cpu: 1
+              max_memory: 0.5
+              max_disk: 2
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse_ProjectResponse_'
+          headers: {}
+          x-apidog-name: Created
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723554-run
+    get:
+      summary: List Projects Endpoint
+      deprecated: false
+      description: ''
+      operationId: list_projects_endpoint_projects_get
+      tags:
+        - projects
+      parameters:
+        - name: cursor
+          in: query
+          description: 다음 페이지 커서(project id). 지정하면 해당 커서 이후부터 조회
+          required: false
+          schema:
+            anyOf:
+              - type: integer
+              - type: 'null'
+            description: 다음 페이지 커서(project id). 지정하면 해당 커서 이후부터 조회
+            title: Cursor
+        - name: limit
+          in: query
+          description: 한 번에 가져올 프로젝트 수 (1~100, 기본 20)
+          required: false
+          schema:
+            type: integer
+            maximum: 100
+            minimum: 1
+            description: 한 번에 가져올 프로젝트 수 (1~100, 기본 20)
+            default: 20
+            title: Limit
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: >-
+                  #/components/schemas/SuccessResponse_CursorPage_ProjectListItemResponse__
+          headers: {}
+          x-apidog-name: OK
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723403-run
+  /projects/available:
+    get:
+      summary: Check Project Available Endpoint
+      deprecated: false
+      description: ''
+      operationId: check_project_available_endpoint_projects_available_get
+      tags:
+        - projects
+      parameters:
+        - name: project_id
+          in: query
+          description: 확인할 프로젝트 ID
+          required: true
+          schema:
+            type: integer
+            description: 확인할 프로젝트 ID
+            title: Project Id
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse_ProjectAvailableResponse_'
+          headers: {}
+          x-apidog-name: OK
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723404-run
+  /projects/owner:
+    get:
+      summary: Check Project Owner Endpoint
+      deprecated: false
+      description: ''
+      operationId: check_project_owner_endpoint_projects_owner_get
+      tags:
+        - projects
+      parameters:
+        - name: project_id
+          in: query
+          description: 확인할 프로젝트 ID
+          required: true
+          schema:
+            type: integer
+            description: 확인할 프로젝트 ID
+            title: Project Id
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse_ProjectOwnerResponse_'
+          headers: {}
+          x-apidog-name: OK
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723405-run
+  /projects/resource-limit:
+    get:
+      summary: Get Project Resource Limit Endpoint
+      deprecated: false
+      description: ''
+      operationId: get_project_resource_limit_endpoint_projects_resource_limit_get
+      tags:
+        - projects
+      parameters:
+        - name: project_id
+          in: query
+          description: 확인할 프로젝트 ID
+          required: true
+          schema:
+            type: integer
+            description: 확인할 프로젝트 ID
+            title: Project Id
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: >-
+                  #/components/schemas/SuccessResponse_ProjectResourceLimitResponse_
+          headers: {}
+          x-apidog-name: OK
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723406-run
+  /projects/{project_id}:
+    get:
+      summary: Get Project Endpoint
+      deprecated: false
+      description: ''
+      operationId: get_project_endpoint_projects__project_id__get
+      tags:
+        - projects
+      parameters:
+        - name: project_id
+          in: path
+          description: ''
+          required: true
+          example: 0
+          schema:
+            type: integer
+            title: Project Id
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse_ProjectDetailResponse_'
+          headers: {}
+          x-apidog-name: OK
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723407-run
+    delete:
+      summary: Delete Project Endpoint
+      deprecated: false
+      description: ''
+      operationId: delete_project_endpoint_projects__project_id__delete
+      tags:
+        - projects
+      parameters:
+        - name: project_id
+          in: path
+          description: ''
+          required: true
+          example: 0
+          schema:
+            type: integer
+            title: Project Id
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse_ProjectResponse_'
+          headers: {}
+          x-apidog-name: OK
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723408-run
+  /projects/{project_id}/name:
+    patch:
+      summary: Update Project Name Endpoint
+      deprecated: false
+      description: ''
+      operationId: update_project_name_endpoint_projects__project_id__name_patch
+      tags:
+        - projects
+      parameters:
+        - name: project_id
+          in: path
+          description: ''
+          required: true
+          example: 0
+          schema:
+            type: integer
+            title: Project Id
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectNameUpdate'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse_ProjectResponse_'
+          headers: {}
+          x-apidog-name: OK
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723409-run
+  /projects/{project_id}/resource:
+    patch:
+      summary: Update Project Resource Endpoint
+      deprecated: false
+      description: ''
+      operationId: update_project_resource_endpoint_projects__project_id__resource_patch
+      tags:
+        - projects
+      parameters:
+        - name: project_id
+          in: path
+          description: ''
+          required: true
+          example: 0
+          schema:
+            type: integer
+            title: Project Id
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectResourceUpdate'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse_ProjectResponse_'
+          headers: {}
+          x-apidog-name: OK
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723410-run
+  /projects/{project_id}/members:
+    get:
+      summary: List Project Members Endpoint
+      deprecated: false
+      description: ''
+      operationId: list_project_members_endpoint_projects__project_id__members_get
+      tags:
+        - projects
+      parameters:
+        - name: project_id
+          in: path
+          description: ''
+          required: true
+          example: 0
+          schema:
+            type: integer
+            title: Project Id
+        - name: cursor
+          in: query
+          description: 다음 페이지 커서(id). 지정하면 해당 커서 이후부터 조회
+          required: false
+          schema:
+            anyOf:
+              - type: integer
+              - type: 'null'
+            description: 다음 페이지 커서(id). 지정하면 해당 커서 이후부터 조회
+            title: Cursor
+        - name: limit
+          in: query
+          description: 한 번에 가져올 멤버 수 (1~100, 기본 20)
+          required: false
+          schema:
+            type: integer
+            maximum: 100
+            minimum: 1
+            description: 한 번에 가져올 멤버 수 (1~100, 기본 20)
+            default: 20
+            title: Limit
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: >-
+                  #/components/schemas/SuccessResponse_CursorPage_ProjectMemberResponse__
+          headers: {}
+          x-apidog-name: OK
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723411-run
+    post:
+      summary: Add Project Member Endpoint
+      deprecated: false
+      description: ''
+      operationId: add_project_member_endpoint_projects__project_id__members_post
+      tags:
+        - projects
+      parameters:
+        - name: project_id
+          in: path
+          description: ''
+          required: true
+          example: 0
+          schema:
+            type: integer
+            title: Project Id
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectMemberAdd'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse_ProjectMemberResponse_'
+          headers: {}
+          x-apidog-name: Created
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723412-run
+  /projects/{project_id}/members/{target_user_id}:
+    delete:
+      summary: Remove Project Member Endpoint
+      deprecated: false
+      description: ''
+      operationId: >-
+        remove_project_member_endpoint_projects__project_id__members__target_user_id__delete
+      tags:
+        - projects
+      parameters:
+        - name: project_id
+          in: path
+          description: ''
+          required: true
+          example: 0
+          schema:
+            type: integer
+            title: Project Id
+        - name: target_user_id
+          in: path
+          description: ''
+          required: true
+          example: 0
+          schema:
+            type: integer
+            title: Target User Id
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse_ProjectMemberResponse_'
+          headers: {}
+          x-apidog-name: OK
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723413-run
+  /projects/{project_id}/owner:
+    patch:
+      summary: Transfer Project Ownership Endpoint
+      deprecated: false
+      description: ''
+      operationId: transfer_project_ownership_endpoint_projects__project_id__owner_patch
+      tags:
+        - projects
+      parameters:
+        - name: project_id
+          in: path
+          description: ''
+          required: true
+          example: 0
+          schema:
+            type: integer
+            title: Project Id
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 식별자
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          example: ''
+          schema:
+            type: string
+            description: 사용자 역할
+            title: X-User-Role
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectOwnerTransfer'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse_ProjectMemberResponse_'
+          headers: {}
+          x-apidog-name: OK
+          x-apidog-ordering: 0
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+          x-apidog-name: Unprocessable Entity
+          x-apidog-ordering: 1
+      security: []
+      x-apidog-folder: Projects/projects
+      x-apidog-status: released
+      x-run-in-apidog: https://app.apidog.com/web/project/1198151/apis/api-30723414-run
+webhooks: {}
+components:
+  schemas:
+    ApplicationItem:
+      properties:
+        id:
+          type: integer
+          title: Id
+        name:
+          type: string
+          title: Name
+        runtime:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Runtime
+        pod_count:
+          type: integer
+          minimum: 0
+          title: Pod Count
+          default: 0
+        exposed_port:
+          anyOf:
+            - type: integer
+            - type: 'null'
+          title: Exposed Port
+        cpu_usage_percent:
+          anyOf:
+            - type: number
+            - type: 'null'
+          title: Cpu Usage Percent
+        ram_usage_percent:
+          anyOf:
+            - type: number
+            - type: 'null'
+          title: Ram Usage Percent
+        health_status:
+          type: string
+          enum:
+            - Healthy
+            - Unhealthy
+            - Stopped
+          title: Health Status
+          default: Stopped
+      type: object
+      required:
+        - id
+        - name
+      title: ApplicationItem
+      x-apidog-orders:
+        - id
+        - name
+        - runtime
+        - pod_count
+        - exposed_port
+        - cpu_usage_percent
+        - ram_usage_percent
+        - health_status
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    CursorPage_ProjectListItemResponse_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ProjectListItemResponse'
+          type: array
+          title: Items
+        has_next:
+          type: boolean
+          title: Has Next
+      type: object
+      required:
+        - items
+        - has_next
+      title: CursorPage[ProjectListItemResponse]
+      x-apidog-orders:
+        - items
+        - has_next
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    CursorPage_ProjectMemberResponse_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ProjectMemberResponse'
+          type: array
+          title: Items
+        has_next:
+          type: boolean
+          title: Has Next
+      type: object
+      required:
+        - items
+        - has_next
+      title: CursorPage[ProjectMemberResponse]
+      x-apidog-orders:
+        - items
+        - has_next
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    DeploymentStatus:
+      properties:
+        state:
+          type: string
+          title: State
+          description: '프로젝트 상태 (예: RUNNING, STOPPED)'
+        message:
+          type: string
+          title: Message
+          description: 상태 메시지 텍스트
+      type: object
+      required:
+        - state
+        - message
+      title: DeploymentStatus
+      x-apidog-orders:
+        - state
+        - message
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    DeploymentSummary:
+      properties:
+        running:
+          type: integer
+          minimum: 0
+          title: Running
+          description: Running 상태인 배포 개수
+          default: 0
+        warning:
+          type: integer
+          minimum: 0
+          title: Warning
+          description: Warning 상태인 배포 개수
+          default: 0
+      type: object
+      title: DeploymentSummary
+      x-apidog-orders:
+        - running
+        - warning
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+      x-apidog-orders:
+        - detail
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    MetricPoint:
+      properties:
+        timestamp:
+          type: string
+          title: Timestamp
+        value:
+          type: number
+          title: Value
+      type: object
+      required:
+        - timestamp
+        - value
+      title: MetricPoint
+      x-apidog-orders:
+        - timestamp
+        - value
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    PortResponse:
+      properties:
+        id:
+          type: integer
+          title: Id
+        project_id:
+          type: integer
+          title: Project Id
+        service_id:
+          type: string
+          title: Service Id
+        service_name:
+          type: string
+          title: Service Name
+        target_deployment_name:
+          type: string
+          title: Target Deployment Name
+        port:
+          type: integer
+          title: Port
+        target_port:
+          type: integer
+          title: Target Port
+        protocol:
+          type: string
+          title: Protocol
+        service_type:
+          type: string
+          title: Service Type
+      type: object
+      required:
+        - id
+        - project_id
+        - service_id
+        - service_name
+        - target_deployment_name
+        - port
+        - target_port
+        - protocol
+        - service_type
+      title: PortResponse
+      x-apidog-orders:
+        - id
+        - project_id
+        - service_id
+        - service_name
+        - target_deployment_name
+        - port
+        - target_port
+        - protocol
+        - service_type
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectCreate:
+      properties:
+        name:
+          type: string
+          minLength: 1
+          title: Name
+          description: 고유한 프로젝트 이름
+          examples:
+            - my-project
+        max_cpu:
+          type: number
+          maximum: 4
+          minimum: 0.1
+          title: Max Cpu
+          description: vCPU 기준 (기본 0.1v)
+          default: 0.1
+        max_memory:
+          type: number
+          maximum: 4
+          minimum: 0.032
+          title: Max Memory
+          description: GB 단위 (기본 0.032GB)
+          default: 0.032
+        max_disk:
+          type: number
+          maximum: 50
+          minimum: 0.032
+          title: Max Disk
+          description: GB 단위 (기본 0.032GB)
+          default: 0.032
+      type: object
+      required:
+        - name
+      title: ProjectCreate
+      x-apidog-orders:
+        - name
+        - max_cpu
+        - max_memory
+        - max_disk
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectAvailableResponse:
+      properties:
+        status:
+          type: boolean
+          title: Status
+          description: 요청 사용자의 프로젝트 접근 가능 여부
+      type: object
+      required:
+        - status
+      title: ProjectAvailableResponse
+      x-apidog-orders:
+        - status
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectDetailResponse:
+      properties:
+        id:
+          type: integer
+          title: Id
+        name:
+          type: string
+          title: Name
+        my_role:
+          type: string
+          enum:
+            - OWNER
+            - MEMBER
+          title: My Role
+          description: 현재 사용자의 프로젝트 내 역할
+        deployments:
+          items:
+            $ref: '#/components/schemas/ApplicationItem'
+          type: array
+          title: Deployments
+        cpu_usage:
+          items:
+            $ref: '#/components/schemas/MetricPoint'
+          type: array
+          title: Cpu Usage
+        memory_usage:
+          items:
+            $ref: '#/components/schemas/MetricPoint'
+          type: array
+          title: Memory Usage
+        disk_usage:
+          items:
+            $ref: '#/components/schemas/MetricPoint'
+          type: array
+          title: Disk Usage
+        network_usage:
+          items:
+            $ref: '#/components/schemas/MetricPoint'
+          type: array
+          title: Network Usage
+        traffic_per_hour:
+          items:
+            $ref: '#/components/schemas/MetricPoint'
+          type: array
+          title: Traffic Per Hour
+        ports:
+          items:
+            $ref: '#/components/schemas/PortResponse'
+          type: array
+          title: Ports
+      type: object
+      required:
+        - id
+        - name
+        - my_role
+        - deployments
+        - cpu_usage
+        - memory_usage
+        - disk_usage
+        - network_usage
+        - traffic_per_hour
+        - ports
+      title: ProjectDetailResponse
+      x-apidog-orders:
+        - id
+        - name
+        - my_role
+        - deployments
+        - cpu_usage
+        - memory_usage
+        - disk_usage
+        - network_usage
+        - traffic_per_hour
+        - ports
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectListItemResponse:
+      properties:
+        id:
+          type: integer
+          title: Id
+        name:
+          type: string
+          title: Name
+        my_role:
+          type: string
+          enum:
+            - OWNER
+            - MEMBER
+          title: My Role
+          description: 현재 사용자의 프로젝트 내 역할
+        domain:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Domain
+          description: 프로젝트 도메인 (있을 경우)
+        deployment_summary:
+          $ref: '#/components/schemas/DeploymentSummary'
+        deployment_status:
+          $ref: '#/components/schemas/DeploymentStatus'
+      type: object
+      required:
+        - id
+        - name
+        - my_role
+        - deployment_summary
+        - deployment_status
+      title: ProjectListItemResponse
+      x-apidog-orders:
+        - id
+        - name
+        - my_role
+        - domain
+        - deployment_summary
+        - deployment_status
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectMemberAdd:
+      properties:
+        user_id:
+          type: integer
+          title: User Id
+          description: 초대할 사용자의 ID
+          examples:
+            - windeath44
+      type: object
+      required:
+        - user_id
+      title: ProjectMemberAdd
+      x-apidog-orders:
+        - user_id
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectMemberResponse:
+      properties:
+        user_id:
+          type: integer
+          title: User Id
+          description: 멤버의 사용자 식별자
+        username:
+          type: string
+          title: Username
+          description: 멤버의 표시 이름
+        profile_image:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Profile Image
+          description: 프로필 이미지 URL
+        role:
+          type: string
+          enum:
+            - OWNER
+            - MEMBER
+          title: Role
+          description: 프로젝트 내 역할
+        joined_at:
+          type: string
+          format: date-time
+          title: Joined At
+          description: 프로젝트 참여 일시
+      type: object
+      required:
+        - user_id
+        - username
+        - role
+        - joined_at
+      title: ProjectMemberResponse
+      x-apidog-orders:
+        - user_id
+        - username
+        - profile_image
+        - role
+        - joined_at
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectNameUpdate:
+      properties:
+        name:
+          type: string
+          minLength: 1
+          title: Name
+          description: 변경할 프로젝트 이름
+          examples:
+            - windeath44
+      type: object
+      required:
+        - name
+      title: ProjectNameUpdate
+      x-apidog-orders:
+        - name
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectResourceUpdate:
+      properties:
+        max_cpu:
+          anyOf:
+            - type: number
+              maximum: 4
+              minimum: 0.1
+            - type: 'null'
+          title: Max Cpu
+          description: vCPU 기준 (0.1v ~ 4v)
+        max_memory:
+          anyOf:
+            - type: number
+              maximum: 4
+              minimum: 0.032
+            - type: 'null'
+          title: Max Memory
+          description: GB 단위 (0.032GB ~ 4GB)
+        max_disk:
+          anyOf:
+            - type: number
+              maximum: 50
+              minimum: 0.032
+            - type: 'null'
+          title: Max Disk
+          description: GB 단위 (0.032GB ~ 50GB, 늘리기만 가능)
+      type: object
+      title: ProjectResourceUpdate
+      x-apidog-orders:
+        - max_cpu
+        - max_memory
+        - max_disk
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectOwnerResponse:
+      properties:
+        status:
+          type: boolean
+          title: Status
+          description: 해당 사용자가 프로젝트 소유자(OWNER)인지 여부
+      type: object
+      required:
+        - status
+      title: ProjectOwnerResponse
+      x-apidog-orders:
+        - status
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectResponse:
+      properties:
+        id:
+          type: integer
+          title: Id
+        user_id:
+          type: integer
+          title: User Id
+        name:
+          type: string
+          title: Name
+        max_cpu:
+          type: number
+          title: Max Cpu
+        max_memory:
+          type: number
+          title: Max Memory
+        max_disk:
+          type: number
+          title: Max Disk
+      type: object
+      required:
+        - id
+        - user_id
+        - name
+        - max_cpu
+        - max_memory
+        - max_disk
+      title: ProjectResponse
+      x-apidog-orders:
+        - id
+        - user_id
+        - name
+        - max_cpu
+        - max_memory
+        - max_disk
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectOwnerTransfer:
+      properties:
+        target_user_id:
+          type: integer
+          title: Target User Id
+          description: 소유권을 이전할 대상 MEMBER 멤버의 ID
+          examples:
+            - windeath44
+      type: object
+      required:
+        - target_user_id
+      title: ProjectOwnerTransfer
+      x-apidog-orders:
+        - target_user_id
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ProjectResourceLimitResponse:
+      properties:
+        project_id:
+          type: integer
+          title: Project Id
+          description: 조회한 프로젝트 ID
+        max_cpu:
+          type: number
+          title: Max Cpu
+          description: 프로젝트 최대 vCPU
+        max_memory:
+          type: number
+          title: Max Memory
+          description: 프로젝트 최대 메모리(GB)
+        max_disk:
+          type: number
+          title: Max Disk
+          description: 프로젝트 최대 디스크(GB)
+      type: object
+      required:
+        - project_id
+        - max_cpu
+        - max_memory
+        - max_disk
+      title: ProjectResourceLimitResponse
+      x-apidog-orders:
+        - project_id
+        - max_cpu
+        - max_memory
+        - max_disk
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    SuccessResponse_CursorPage_ProjectListItemResponse__:
+      properties:
+        message:
+          type: string
+          title: Message
+        data:
+          $ref: '#/components/schemas/CursorPage_ProjectListItemResponse_'
+      type: object
+      required:
+        - message
+        - data
+      title: SuccessResponse[CursorPage[ProjectListItemResponse]]
+      x-apidog-orders:
+        - message
+        - data
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    SuccessResponse_CursorPage_ProjectMemberResponse__:
+      properties:
+        message:
+          type: string
+          title: Message
+        data:
+          $ref: '#/components/schemas/CursorPage_ProjectMemberResponse_'
+      type: object
+      required:
+        - message
+        - data
+      title: SuccessResponse[CursorPage[ProjectMemberResponse]]
+      x-apidog-orders:
+        - message
+        - data
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    SuccessResponse_ProjectDetailResponse_:
+      properties:
+        message:
+          type: string
+          title: Message
+        data:
+          $ref: '#/components/schemas/ProjectDetailResponse'
+      type: object
+      required:
+        - message
+        - data
+      title: SuccessResponse[ProjectDetailResponse]
+      x-apidog-orders:
+        - message
+        - data
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    SuccessResponse_ProjectMemberResponse_:
+      properties:
+        message:
+          type: string
+          title: Message
+        data:
+          $ref: '#/components/schemas/ProjectMemberResponse'
+      type: object
+      required:
+        - message
+        - data
+      title: SuccessResponse[ProjectMemberResponse]
+      x-apidog-orders:
+        - message
+        - data
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    SuccessResponse_ProjectResponse_:
+      properties:
+        message:
+          type: string
+          title: Message
+        data:
+          $ref: '#/components/schemas/ProjectResponse'
+      type: object
+      required:
+        - message
+        - data
+      title: SuccessResponse[ProjectResponse]
+      x-apidog-orders:
+        - message
+        - data
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    SuccessResponse_ProjectAvailableResponse_:
+      properties:
+        message:
+          type: string
+          title: Message
+        data:
+          $ref: '#/components/schemas/ProjectAvailableResponse'
+      type: object
+      required:
+        - message
+        - data
+      title: SuccessResponse[ProjectAvailableResponse]
+      x-apidog-orders:
+        - message
+        - data
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+        - loc
+        - msg
+        - type
+      title: ValidationError
+      x-apidog-orders:
+        - loc
+        - msg
+        - type
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    SuccessResponse_ProjectOwnerResponse_:
+      properties:
+        message:
+          type: string
+          title: Message
+        data:
+          $ref: '#/components/schemas/ProjectOwnerResponse'
+      type: object
+      required:
+        - message
+        - data
+      title: SuccessResponse[ProjectOwnerResponse]
+      x-apidog-orders:
+        - message
+        - data
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+    SuccessResponse_ProjectResourceLimitResponse_:
+      properties:
+        message:
+          type: string
+          title: Message
+        data:
+          $ref: '#/components/schemas/ProjectResourceLimitResponse'
+      type: object
+      required:
+        - message
+        - data
+      title: SuccessResponse[ProjectResourceLimitResponse]
+      x-apidog-orders:
+        - message
+        - data
+      x-apidog-ignore-properties: []
+      x-apidog-folder: ''
+  responses: {}
+  securitySchemes: {}
+servers: []
+security: []

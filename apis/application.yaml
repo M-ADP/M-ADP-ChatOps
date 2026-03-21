@@ -1,0 +1,531 @@
+openapi: 3.1.0
+info:
+  title: Default module
+  description: ''
+  version: 1.0.0
+tags: []
+paths:
+  /apps:
+    post:
+      summary: 애플리케이션 생성하기
+      deprecated: false
+      description: ''
+      tags: []
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAppDeploymentRequestDto'
+              description: ''
+            example:
+              name: Carroll Dare
+              cpu: 0.5730022605282189
+              memory: 1584
+              disk: 9
+              project_id: '98'
+              port: -28465550
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    description: ''
+                  data:
+                    type: integer
+                    format: int64
+                    description: 애플리케이션 아이디
+              example:
+                message: ''
+                data: 0
+          headers: {}
+      security: []
+    delete:
+      summary: 애플리케이션 제거하기
+      deprecated: false
+      description: ''
+      tags: []
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteAppDeploymentRequestDto'
+              description: ''
+            examples: {}
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+          headers: {}
+      security: []
+    get:
+      summary: 프로젝트 아이디로 애플리케이션들 상태 조회하기
+      deprecated: false
+      description: ''
+      tags: []
+      parameters:
+        - name: project_id
+          in: query
+          description: ''
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: >-
+                  #/components/schemas/ResponseEntityApiResponseDtoListAppDeploymentStatusResponseDto
+              example:
+                message: ''
+                data:
+                  - app_id: ''
+                    pod_count: 0
+                    port: 0
+                    cpu_usage_percentage: 0
+                    memory_usage_percentage: 0
+          headers: {}
+      security: []
+  /apps/github:
+    patch:
+      summary: 깃허브 정보 넣기
+      deprecated: false
+      description: ''
+      tags: []
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateGithubInfoRequestDto'
+              description: ''
+            example:
+              appDeploymentId: 62629890020610050
+              owner: M-ADP
+              repository: TestAppDeploymentRepository
+              branch: main
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+          headers: {}
+      security: []
+  /apps/resources:
+    patch:
+      summary: 자원 정보 변경하기
+      deprecated: false
+      description: ''
+      tags: []
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateResourceInfoRequestDto'
+              description: ''
+            examples: {}
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+          headers: {}
+      security: []
+  /apps/logs:
+    get:
+      summary: 프로젝트 아이디와 애플리케이션 아이디로 로그 조회하기
+      deprecated: false
+      description: ''
+      tags: []
+      parameters:
+        - name: project_id
+          in: query
+          description: ''
+          required: true
+          schema:
+            type: string
+        - name: app_name
+          in: query
+          description: ''
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseEntityApiResponseDtoString'
+              example:
+                message: ''
+                data: ''
+          headers: {}
+      security: []
+  /apps/status:
+    get:
+      summary: 프로젝트 아이디와 애플리케이션 아이디로 상태 조회하기
+      deprecated: false
+      description: ''
+      tags: []
+      parameters:
+        - name: project_id
+          in: query
+          description: ''
+          required: true
+          schema:
+            type: string
+        - name: app_name
+          in: query
+          description: ''
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: >-
+                  #/components/schemas/ResponseEntityApiResponseDtoAppResourceStatusResponseDto
+              example:
+                message: ''
+                data:
+                  appId: 0
+                  cpu_usage_percentage: 0
+                  memory_used: ''
+                  memory_total: ''
+                  disk_used: ''
+                  disk_total: ''
+                  current_instances: 0
+                  available_instances: 0
+          headers: {}
+      security: []
+  /apps/details:
+    get:
+      summary: 프로젝트 아이디와 애플리케이션 아이디로 세부사항 조회하기
+      deprecated: false
+      description: ''
+      tags: []
+      parameters:
+        - name: project_id
+          in: query
+          description: ''
+          required: true
+          schema:
+            type: string
+        - name: app_name
+          in: query
+          description: ''
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: >-
+                  #/components/schemas/ResponseEntityApiResponseDtoAppDeploymentInfoResponseDto
+              example:
+                message: ''
+                data:
+                  app_id: 0
+                  port: 0
+                  resource_use_percentage: 0
+                  github_repository_url: ''
+                  status: ''
+          headers: {}
+      security: []
+webhooks: {}
+components:
+  schemas:
+    ResponseEntityApiResponseDtoLong:
+      type: object
+      properties:
+        message:
+          type: string
+          description: ''
+        data:
+          type: integer
+          description: ''
+          format: int64
+      x-apifox-orders:
+        - message
+        - data
+    CreateAppDeploymentRequestDto:
+      type: object
+      properties:
+        name:
+          type: string
+          description: ''
+        cpu:
+          type: number
+          description: ''
+          minimum: 0.1
+          maximum: 4
+          x-apifox-mock: '@float(0.1,4.0,2)'
+        memory:
+          type: integer
+          description: ''
+          minimum: 512
+          maximum: 2048
+          x-apifox-mock: '@integer(512,2048)'
+        disk:
+          type: integer
+          description: ''
+          minimum: 2
+          maximum: 16
+          x-apifox-mock: '@integer(2,16)'
+        project_id:
+          type: string
+          description: ''
+        port:
+          type: integer
+          description: ''
+      x-apifox-orders:
+        - name
+        - cpu
+        - memory
+        - disk
+        - project_id
+        - port
+      required:
+        - name
+        - cpu
+        - memory
+        - disk
+        - project_id
+        - port
+    UpdateResourceInfoRequestDto:
+      type: object
+      properties:
+        application_id:
+          type: integer
+          description: ''
+          format: int64
+        max_cpu:
+          type: integer
+          description: ''
+          minimum: 1
+          maximum: 4
+          x-apifox-mock: '@integer(1,4)'
+        max_memory:
+          type: integer
+          description: ''
+          minimum: 512
+          maximum: 2048
+          x-apifox-mock: '@integer(512,2048)'
+        max_disk:
+          type: integer
+          description: ''
+          minimum: 2
+          maximum: 16
+          x-apifox-mock: '@integer(2,16)'
+      x-apifox-orders:
+        - application_id
+        - max_cpu
+        - max_memory
+        - max_disk
+      required:
+        - application_id
+        - max_cpu
+        - max_memory
+        - max_disk
+    UpdateGithubInfoRequestDto:
+      type: object
+      properties:
+        appDeploymentId:
+          type: integer
+          description: ''
+          format: int64
+        owner:
+          type: string
+          description: ''
+        repository:
+          type: string
+          description: ''
+        branch:
+          type: string
+          description: ''
+      x-apifox-orders:
+        - appDeploymentId
+        - owner
+        - repository
+        - branch
+      required:
+        - appDeploymentId
+        - owner
+        - repository
+    DeleteAppDeploymentRequestDto:
+      type: object
+      properties:
+        application_id:
+          type: integer
+          description: ''
+          format: int64
+      x-apifox-orders:
+        - application_id
+    AppDeploymentStatusResponseDto:
+      type: object
+      properties:
+        name:
+          type: string
+          description: ''
+        pod_count:
+          type: integer
+          description: ''
+        port:
+          type: integer
+          description: ''
+        cpu_usage_percentage:
+          type: integer
+          description: ''
+        memory_usage_percentage:
+          type: integer
+          description: ''
+      x-apifox-orders:
+        - name
+        - pod_count
+        - port
+        - cpu_usage_percentage
+        - memory_usage_percentage
+    ResponseEntityApiResponseDtoListAppDeploymentStatusResponseDto:
+      type: object
+      properties:
+        message:
+          type: string
+          description: ''
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AppDeploymentStatusResponseDto'
+            description: >-
+              madp.appdeployment.domain.presentation.dto.response.AppDeploymentStatusResponseDto
+          description: ''
+      x-apifox-orders:
+        - message
+        - data
+    ResponseEntityApiResponseDtoString:
+      type: object
+      properties:
+        message:
+          type: string
+          description: ''
+        data:
+          type: string
+          description: ''
+      x-apifox-orders:
+        - message
+        - data
+    AppResourceStatusResponseDto:
+      type: object
+      properties:
+        appId:
+          type: integer
+          description: ''
+          format: int64
+        cpu_usage_percentage:
+          type: integer
+          description: ''
+        memory_used:
+          type: string
+          description: ''
+        memory_total:
+          type: string
+          description: ''
+        disk_used:
+          type: string
+          description: ''
+        disk_total:
+          type: string
+          description: ''
+        current_instances:
+          type: integer
+          description: ''
+        available_instances:
+          type: integer
+          description: ''
+      x-apifox-orders:
+        - appId
+        - cpu_usage_percentage
+        - memory_used
+        - memory_total
+        - disk_used
+        - disk_total
+        - current_instances
+        - available_instances
+    ResponseEntityApiResponseDtoAppResourceStatusResponseDto:
+      type: object
+      properties:
+        message:
+          type: string
+          description: ''
+        data:
+          $ref: '#/components/schemas/AppResourceStatusResponseDto'
+          description: ''
+      x-apifox-orders:
+        - message
+        - data
+    AppDeploymentInfoResponseDto:
+      type: object
+      properties:
+        app_id:
+          type: integer
+          description: ''
+          format: int64
+        port:
+          type: integer
+          description: ''
+        resource_use_percentage:
+          type: integer
+          description: ''
+        github_repository_url:
+          type: string
+          description: ''
+        status:
+          type: string
+          description: ''
+      x-apifox-orders:
+        - app_id
+        - port
+        - resource_use_percentage
+        - github_repository_url
+        - status
+    ResponseEntityApiResponseDtoAppDeploymentInfoResponseDto:
+      type: object
+      properties:
+        message:
+          type: string
+          description: ''
+        data:
+          $ref: '#/components/schemas/AppDeploymentInfoResponseDto'
+          description: ''
+      x-apifox-orders:
+        - message
+        - data
+  responses: {}
+  securitySchemes: {}
+servers: []
+security: []

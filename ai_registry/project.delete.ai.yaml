@@ -1,0 +1,50 @@
+id: project.delete
+source_file: apis/project.yaml
+operation_id: delete_project_endpoint_projects__project_id__delete
+path: /projects/{project_id}
+method: DELETE
+summary: Delete Project Endpoint
+capability: Delete Project Endpoint
+usable_in:
+- command
+operation_kind: delete
+when_to_use:
+- 사용자 요청이 'Delete Project Endpoint'에 해당하는 작업일 때 사용합니다.
+when_not_to_use:
+- 다른 리소스를 조회하거나 변경하는 요청이면 사용하지 않습니다.
+requires_confirmation: true
+risk_level: high
+side_effects:
+- Delete Project Endpoint
+required_headers:
+- X-User-Id
+- X-User-Role
+required_inputs:
+  headers:
+  - name: X-User-Id
+    required: true
+    type: string
+    description: 사용자 식별자
+  - name: X-User-Role
+    required: true
+    type: string
+    description: 사용자 역할
+  path:
+  - name: project_id
+    required: true
+    type: integer
+  query: []
+  body: null
+preconditions:
+- 필수 입력값이 모두 준비되어 있어야 합니다.
+missing_info_questions:
+- X-User-Id 값을 확인해야 합니다.
+- X-User-Role 값을 확인해야 합니다.
+- project_id 값을 확인해야 합니다.
+response_interpretation: 응답의 성공 여부와 생성 또는 변경된 핵심 결과를 사용자에게 요약합니다.
+plan_template:
+- Delete Project Endpoint 실행에 필요한 입력값을 확인합니다.
+- DELETE /projects/{project_id} 호출 전 영향 범위를 설명합니다.
+- DELETE /projects/{project_id} 호출 결과를 검증하고 사용자에게 요약합니다.
+examples:
+- Delete Project Endpoint

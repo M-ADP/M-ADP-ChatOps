@@ -1,0 +1,228 @@
+openapi: 3.1.0
+info:
+  title: Default module
+  description: ''
+  version: 1.0.0
+tags:
+  - name: app-deployment
+paths:
+  /monitoring/app-deployment/{project_id}/{app_deployment_name}:
+    get:
+      summary: Get App Deployment Traffic
+      deprecated: false
+      description: ''
+      operationId: >-
+        get_app_deployment_traffic_monitoring_app_deployment__project_id___app_deployment_name__get
+      tags:
+        - app-deployment
+      parameters:
+        - name: project_id
+          in: path
+          description: ''
+          required: true
+          example: 0
+          schema:
+            type: integer
+            title: Project Id
+        - name: app_deployment_name
+          in: path
+          description: ''
+          required: true
+          example: ''
+          schema:
+            type: string
+            title: App Deployment Name
+        - name: start
+          in: query
+          description: ''
+          required: false
+          schema:
+            type: string
+            format: date-time
+            default: '2026-03-08T21:49:04.263469'
+            title: Start
+        - name: end
+          in: query
+          description: ''
+          required: false
+          schema:
+            type: string
+            format: date-time
+            title: End
+        - name: X-User-Id
+          in: header
+          description: ''
+          required: true
+          example: 0
+          schema:
+            type: integer
+            title: X-User-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: >-
+                  #/components/schemas/MadpResponse_AppDeploymentTrafficResponse_
+          headers: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          headers: {}
+      security: []
+webhooks: {}
+components:
+  schemas:
+    AppDeployment:
+      properties:
+        id:
+          type: integer
+          title: Id
+        name:
+          type: string
+          title: Name
+        owner_id:
+          type: integer
+          title: Owner Id
+        cpu_usage_percentage:
+          type: integer
+          title: Cpu Usage Percentage
+        memory_used:
+          type: string
+          title: Memory Used
+        memory_total:
+          type: string
+          title: Memory Total
+        disk_used:
+          type: string
+          title: Disk Used
+        disk_total:
+          type: string
+          title: Disk Total
+        current_instance:
+          type: integer
+          title: Current Instance
+        available_instances:
+          type: integer
+          title: Available Instances
+      type: object
+      required:
+        - id
+        - name
+        - owner_id
+        - cpu_usage_percentage
+        - memory_used
+        - memory_total
+        - disk_used
+        - disk_total
+        - current_instance
+        - available_instances
+      title: AppDeployment
+    AppDeploymentTraffic:
+      properties:
+        app_deployment:
+          $ref: '#/components/schemas/AppDeployment'
+        traffic:
+          $ref: '#/components/schemas/Traffic'
+      type: object
+      required:
+        - app_deployment
+        - traffic
+      title: AppDeploymentTraffic
+    AppDeploymentTrafficResponse:
+      properties:
+        app_deployment_traffic:
+          $ref: '#/components/schemas/AppDeploymentTraffic'
+      type: object
+      required:
+        - app_deployment_traffic
+      title: AppDeploymentTrafficResponse
+    MadpResponse_AppDeploymentTrafficResponse_:
+      properties:
+        data:
+          anyOf:
+            - $ref: '#/components/schemas/AppDeploymentTrafficResponse'
+            - type: 'null'
+        message:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Message
+      type: object
+      title: MadpResponse[AppDeploymentTrafficResponse]
+    Traffic:
+      properties:
+        id:
+          type: integer
+          title: Id
+        start:
+          type: string
+          format: date-time
+          title: Start
+        end:
+          type: string
+          format: date-time
+          title: End
+        series:
+          items:
+            $ref: '#/components/schemas/TrafficPoint'
+          type: array
+          title: Series
+      type: object
+      required:
+        - id
+        - start
+        - end
+      title: Traffic
+    TrafficPoint:
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          title: Timestamp
+        value:
+          type: number
+          title: Value
+      type: object
+      required:
+        - timestamp
+        - value
+      title: TrafficPoint
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+        - loc
+        - msg
+        - type
+      title: ValidationError
+  responses: {}
+  securitySchemes: {}
+servers: []
+security: []
