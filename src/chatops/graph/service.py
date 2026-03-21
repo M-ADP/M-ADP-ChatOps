@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from uuid import uuid4
+
+from chatops.graph.nodes import WorkflowNodes
+from chatops.graph.state import GraphState
+from chatops.graph.workflow import GraphWorkflow
+
+
+@dataclass(frozen=True)
+class GraphResult:
+    request_id: str
+    session_id: str
+    user_id: str
+    status: str
+    request_type: str
+    requires_approval: bool
+    intent: str
+    final_response: str | None
+    selected_operation_ids: list[str]
+
+
+class GraphService:
+    def __init__(self, llm_service, registry_service, adapter_service) -> None:
+        self.workflow = GraphWorkflow(
+            WorkflowNodes(
+                llm_service=llm_service,
+                registry_service=registry_service,
+                adapter_service=adapter_service,
+            )
+        ).compile()
+
+    def handle_request(self, session_id: str, user_id: str, message_text: str) -> GraphResult:
+        initial_state: GraphState = {
+            "request_id": str(uuid4()),
+            "session_id": session_id,
+            "user_id": user_id,
+            "message_text": message_text,
+            "request_status": "created",
+            "selected_operation_ids": [],
+            "requires_approval": False,
+        }
+        result = self.workflow.invoke(initial_state)
+        return GraphResult(
+            request_id=result["request_id"],
+            session_id=result["session_id"],
+            user_id=result["user_id"],
+            status=result["request_status"],
+            request_type=result["request_type"],
+            requires_approval=bool(result.get("requires_approval", False)),
+            intent=str(result.get("intent", "")),
+            final_response=result.get("final_response"),
+            selected_operation_ids=list(result.get("selected_operation_ids", [])),
+        )
