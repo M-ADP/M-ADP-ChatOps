@@ -70,7 +70,9 @@ class WorkflowNodes:
     def plan_command(self, state: GraphState) -> GraphState:
         candidates = self.registry_service.find_candidates(state["message_text"], usable_in="command")
         operation_ids = [candidate.id for candidate in candidates]
+        selected = candidates[0] if candidates else None
         return {
+            "selected_operation": selected,
             "selected_operation_ids": operation_ids,
             "final_response": self.llm_service.plan_command(state["message_text"], operation_ids),
             "requires_approval": True,
@@ -86,7 +88,31 @@ class WorkflowNodes:
         return state
 
     def execute_command(self, state: GraphState) -> GraphState:
-        return state
+        operation = state.get("selected_operation")
+        if operation is None:
+            return {
+                "command_result": {"success": False, "summary": "적절한 명령 API를 찾지 못했습니다."},
+                "request_status": "failed",
+                "requires_approval": False,
+            }
+
+        return {
+            "command_result": self.adapter_service.execute_command(operation, state["user_id"]),
+            "request_status": "executing",
+            "requires_approval": False,
+        }
 
     def respond_command(self, state: GraphState) -> GraphState:
-        return state
+        result = state.get("command_result") or {}
+        summary = str(result.get("summary", "명령 실행 결과가 없습니다."))
+        if result.get("success") is False:
+            return {
+                "final_response": f"명령 실행 실패: {summary}",
+                "request_status": "failed",
+                "requires_approval": False,
+            }
+        return {
+            "final_response": f"명령 실행 응답: {summary}",
+            "request_status": "completed",
+            "requires_approval": False,
+        }
