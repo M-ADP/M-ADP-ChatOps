@@ -10,6 +10,7 @@ class GraphState(TypedDict, total=False):
     session_id: str
     user_id: str
     message_text: str
+    approval_granted: bool
     request_type: str
     request_status: str
     requires_approval: bool
@@ -20,4 +21,5 @@ class GraphState(TypedDict, total=False):
     selected_operation_ids: list[str]
     selected_operation: RegistryEntry | None
     query_result: dict[str, Any] | None
+    command_result: dict[str, Any] | None
     final_response: str | None
