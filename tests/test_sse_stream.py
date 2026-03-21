@@ -13,7 +13,14 @@ from chatops.services.events import EventService
 
 
 class StubGraphService:
-    def handle_request(self, session_id: str, user_id: str, message_text: str) -> GraphResult:
+    def handle_request(
+        self,
+        session_id: str,
+        user_id: str,
+        message_text: str,
+        user_role: str | None = None,
+        org_id: str | None = None,
+    ) -> GraphResult:
         return GraphResult(
             request_id="graph-request-id",
             session_id=session_id,
