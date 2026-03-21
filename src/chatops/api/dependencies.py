@@ -10,17 +10,10 @@ from chatops.config import Settings, get_settings
 from chatops.db.session import build_session_factory
 from chatops.graph.service import GraphService
 from chatops.schemas.auth import AuthContext
+from chatops.services.adapters import DownstreamAdapterService
 from chatops.services.auth import build_auth_context
 from chatops.services.llm import GroqLLMService
 from chatops.services.registry import RegistryService
-
-
-class PlaceholderAdapterService:
-    def execute_query(self, operation, user_id: str) -> dict[str, object]:
-        return {"summary": f"{operation.id} downstream 연동 전 ({user_id})"}
-
-    def execute_command(self, operation, user_id: str) -> dict[str, object]:
-        return {"summary": f"{operation.id} 명령 실행 ({user_id})"}
 
 
 @lru_cache(maxsize=1)
@@ -51,10 +44,17 @@ def get_llm_service() -> GroqLLMService:
 
 @lru_cache(maxsize=1)
 def get_graph_service() -> GraphService:
+    settings = get_app_settings()
     return GraphService(
         llm_service=get_llm_service(),
         registry_service=get_registry_service(),
-        adapter_service=PlaceholderAdapterService(),
+        adapter_service=DownstreamAdapterService(
+            resource_server_base_url=settings.resource_server_base_url,
+            application_server_base_url=settings.application_server_base_url,
+            user_server_base_url=settings.user_server_base_url,
+            timeout_seconds=settings.downstream_timeout_seconds,
+            use_fake=settings.use_fake_downstream_client,
+        ),
     )
 
 
