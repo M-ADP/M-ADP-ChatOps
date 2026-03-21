@@ -43,6 +43,8 @@ def create_request(
         session_id=session_id,
         user_id=auth.user_id,
         message_text=payload.message,
+        user_role=auth.user_role,
+        org_id=auth.org_id,
     )
     repo = RequestRepository(db_session)
     record = repo.create(
@@ -155,6 +157,8 @@ def approve_request(
         session_id=session_id,
         user_id=auth.user_id,
         message_text=record.message_text,
+        user_role=auth.user_role,
+        org_id=auth.org_id,
     )
     record.status = graph_result.status
     record.final_response = graph_result.final_response
