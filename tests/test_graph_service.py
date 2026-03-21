@@ -102,6 +102,9 @@ class FakeAdapterService:
     def execute_query(self, operation: RegistryEntry, user_id: str) -> dict[str, object]:
         return {"summary": f"{operation.id} ok for {user_id}"}
 
+    def execute_command(self, operation: RegistryEntry, user_id: str) -> dict[str, object]:
+        return {"summary": f"{operation.id} executed for {user_id}"}
+
 
 fake_graph_service = GraphService(
     llm_service=FakeLLMService(),
@@ -142,3 +145,16 @@ def test_command_request_stops_at_pending_approval() -> None:
     assert result.status == "pending_approval"
     assert result.requires_approval is True
     assert result.selected_operation_ids == ["project.create"]
+
+
+def test_command_resume_executes_after_approval() -> None:
+    result = fake_graph_service.resume_request(
+        request_id="request-1",
+        session_id="session-1",
+        user_id="user-1",
+        message_text="프로젝트 생성해줘",
+    )
+
+    assert result.status == "completed"
+    assert result.requires_approval is False
+    assert result.final_response == "명령 실행 응답: project.create executed for user-1"
