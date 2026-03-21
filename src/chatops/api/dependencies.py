@@ -11,27 +11,16 @@ from chatops.db.session import build_session_factory
 from chatops.graph.service import GraphService
 from chatops.schemas.auth import AuthContext
 from chatops.services.auth import build_auth_context
-from chatops.services.llm import LLMService
+from chatops.services.llm import GroqLLMService
 from chatops.services.registry import RegistryService
 
 
-class UnconfiguredLLMService:
-    def classify(self, message_text: str) -> dict[str, object]:
-        raise RuntimeError("LLM service is not configured")
-
-    def answer_inquiry(self, message_text: str) -> str:
-        raise RuntimeError("LLM service is not configured")
-
-    def interpret_query_result(self, message_text: str, raw_result: dict[str, object]) -> str:
-        raise RuntimeError("LLM service is not configured")
-
-    def plan_command(self, message_text: str, operation_ids: list[str]) -> str:
-        raise RuntimeError("LLM service is not configured")
-
-
-class UnconfiguredAdapterService:
+class PlaceholderAdapterService:
     def execute_query(self, operation, user_id: str) -> dict[str, object]:
-        raise RuntimeError("Adapter service is not configured")
+        return {"summary": f"{operation.id} downstream 연동 전 ({user_id})"}
+
+    def execute_command(self, operation, user_id: str) -> dict[str, object]:
+        return {"summary": f"{operation.id} 명령 실행 ({user_id})"}
 
 
 @lru_cache(maxsize=1)
@@ -51,11 +40,21 @@ def get_registry_service() -> RegistryService:
 
 
 @lru_cache(maxsize=1)
+def get_llm_service() -> GroqLLMService:
+    settings = get_app_settings()
+    return GroqLLMService(
+        api_key=settings.groq_api_key,
+        model=settings.groq_model,
+        timeout_seconds=settings.downstream_timeout_seconds,
+    )
+
+
+@lru_cache(maxsize=1)
 def get_graph_service() -> GraphService:
     return GraphService(
-        llm_service=UnconfiguredLLMService(),
+        llm_service=get_llm_service(),
         registry_service=get_registry_service(),
-        adapter_service=UnconfiguredAdapterService(),
+        adapter_service=PlaceholderAdapterService(),
     )
 
 
