@@ -1,14 +1,21 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
+from dataclasses import dataclass
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
+from chatops.api.dependencies import get_db_session, get_graph_service
+from chatops.app import create_app
 from chatops.db.repositories import (
     RequestEventRepository,
     RequestRepository,
     SessionRepository,
 )
 from chatops.domain.enums import RequestStatus
+from chatops.graph.service import GraphResult
 from chatops.schemas.events import RequestEventResponse
 from chatops.schemas.requests import (
     ApproveRequestResponse,
@@ -17,6 +24,42 @@ from chatops.schemas.requests import (
     RequestResponse,
 )
 from chatops.services.auth import build_auth_context
+
+
+@dataclass
+class StubGraphService:
+    status: str = "pending_approval"
+    requires_approval: bool = True
+
+    def handle_request(self, session_id: str, user_id: str, message_text: str) -> GraphResult:
+        return GraphResult(
+            request_id="request-1",
+            session_id=session_id,
+            user_id=user_id,
+            status=self.status,
+            request_type="command",
+            requires_approval=self.requires_approval,
+            intent="execute_command",
+            final_response=None,
+            selected_operation_ids=["project.create"],
+        )
+
+
+@pytest.fixture()
+def client(db_session):
+    app = create_app()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return StubGraphService()
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
 
 
 def test_request_repository_updates_status(db_session) -> None:
@@ -119,3 +162,20 @@ def test_request_schemas_and_auth_context_match_contract() -> None:
     assert approved.status == "approved"
     assert rejected.status == "rejected"
     assert event.model_dump()["sequence"] == 2
+
+
+def test_create_request_returns_processing_status(client: TestClient) -> None:
+    session = client.post(
+        "/api/v1/sessions",
+        headers={"X-User-Id": "user-1"},
+        json={},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/sessions/{session['session_id']}/requests",
+        headers={"X-User-Id": "user-1"},
+        json={"message": "프로젝트 생성해줘"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] in {"processing", "pending_approval"}
