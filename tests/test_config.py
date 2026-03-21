@@ -1,7 +1,9 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
-from chatops.config import Settings
+from chatops.config import Settings, resolve_env_file
 
 
 def test_settings_have_required_defaults() -> None:
@@ -18,3 +20,23 @@ def test_settings_have_required_defaults() -> None:
 def test_settings_require_database_url_and_groq_api_key() -> None:
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_resolve_env_file_prefers_vault_path(tmp_path: Path) -> None:
+    vault_file = tmp_path / "vault.env"
+    local_file = tmp_path / ".env"
+    vault_file.write_text("GROQ_API_KEY=vault\n", encoding="utf-8")
+    local_file.write_text("GROQ_API_KEY=local\n", encoding="utf-8")
+
+    resolved = resolve_env_file(vault_path=vault_file, project_root=tmp_path)
+
+    assert resolved == vault_file
+
+
+def test_resolve_env_file_falls_back_to_project_root(tmp_path: Path) -> None:
+    resolved = resolve_env_file(
+        vault_path=tmp_path / "missing.env",
+        project_root=tmp_path,
+    )
+
+    assert resolved == tmp_path / ".env"
