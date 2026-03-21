@@ -6,10 +6,11 @@ from collections.abc import Generator
 import os
 
 import pytest
+from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import Session
 
 from chatops.db.base import Base
-from chatops.db.session import build_engine, build_session_factory
+from chatops.db.session import build_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -28,10 +29,9 @@ def postgres_dsn() -> str:
 
 @pytest.fixture()
 def db_session() -> Generator[Session, None, None]:
-    engine = build_engine("sqlite+pysqlite:///:memory:")
+    engine = build_engine("sqlite+pysqlite://", poolclass=StaticPool)
     Base.metadata.create_all(engine)
-    session_factory = build_session_factory("sqlite+pysqlite:///:memory:")
-    session = session_factory(bind=engine)
+    session = Session(bind=engine, autoflush=False, autocommit=False, future=True)
     try:
         yield session
     finally:
