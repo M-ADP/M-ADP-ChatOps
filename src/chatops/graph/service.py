@@ -31,11 +31,20 @@ class GraphService:
             )
         ).compile()
 
-    def handle_request(self, session_id: str, user_id: str, message_text: str) -> GraphResult:
+    def handle_request(
+        self,
+        session_id: str,
+        user_id: str,
+        message_text: str,
+        user_role: str | None = None,
+        org_id: str | None = None,
+    ) -> GraphResult:
         initial_state: GraphState = {
             "request_id": str(uuid4()),
             "session_id": session_id,
             "user_id": user_id,
+            "user_role": user_role,
+            "org_id": org_id,
             "message_text": message_text,
             "approval_granted": False,
             "request_status": "created",
@@ -44,11 +53,21 @@ class GraphService:
         }
         return self._invoke(initial_state)
 
-    def resume_request(self, request_id: str, session_id: str, user_id: str, message_text: str) -> GraphResult:
+    def resume_request(
+        self,
+        request_id: str,
+        session_id: str,
+        user_id: str,
+        message_text: str,
+        user_role: str | None = None,
+        org_id: str | None = None,
+    ) -> GraphResult:
         initial_state: GraphState = {
             "request_id": request_id,
             "session_id": session_id,
             "user_id": user_id,
+            "user_role": user_role,
+            "org_id": org_id,
             "message_text": message_text,
             "approval_granted": True,
             "request_status": "approved",
