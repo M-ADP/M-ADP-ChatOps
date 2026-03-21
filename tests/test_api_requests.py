@@ -31,7 +31,14 @@ class StubGraphService:
     status: str = "pending_approval"
     requires_approval: bool = True
 
-    def handle_request(self, session_id: str, user_id: str, message_text: str) -> GraphResult:
+    def handle_request(
+        self,
+        session_id: str,
+        user_id: str,
+        message_text: str,
+        user_role: str | None = None,
+        org_id: str | None = None,
+    ) -> GraphResult:
         return GraphResult(
             request_id="request-1",
             session_id=session_id,
@@ -44,7 +51,15 @@ class StubGraphService:
             selected_operation_ids=["project.create"],
         )
 
-    def resume_request(self, request_id: str, session_id: str, user_id: str, message_text: str) -> GraphResult:
+    def resume_request(
+        self,
+        request_id: str,
+        session_id: str,
+        user_id: str,
+        message_text: str,
+        user_role: str | None = None,
+        org_id: str | None = None,
+    ) -> GraphResult:
         return GraphResult(
             request_id=request_id,
             session_id=session_id,
