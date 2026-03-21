@@ -37,10 +37,27 @@ class GraphService:
             "session_id": session_id,
             "user_id": user_id,
             "message_text": message_text,
+            "approval_granted": False,
             "request_status": "created",
             "selected_operation_ids": [],
             "requires_approval": False,
         }
+        return self._invoke(initial_state)
+
+    def resume_request(self, request_id: str, session_id: str, user_id: str, message_text: str) -> GraphResult:
+        initial_state: GraphState = {
+            "request_id": request_id,
+            "session_id": session_id,
+            "user_id": user_id,
+            "message_text": message_text,
+            "approval_granted": True,
+            "request_status": "approved",
+            "selected_operation_ids": [],
+            "requires_approval": False,
+        }
+        return self._invoke(initial_state)
+
+    def _invoke(self, initial_state: GraphState) -> GraphResult:
         result = self.workflow.invoke(initial_state)
         return GraphResult(
             request_id=result["request_id"],
