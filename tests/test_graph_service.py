@@ -99,10 +99,22 @@ class FakeRegistryService:
 
 @dataclass
 class FakeAdapterService:
-    def execute_query(self, operation: RegistryEntry, user_id: str) -> dict[str, object]:
+    def execute_query(
+        self,
+        operation: RegistryEntry,
+        user_id: str,
+        user_role: str | None = None,
+        org_id: str | None = None,
+    ) -> dict[str, object]:
         return {"summary": f"{operation.id} ok for {user_id}"}
 
-    def execute_command(self, operation: RegistryEntry, user_id: str) -> dict[str, object]:
+    def execute_command(
+        self,
+        operation: RegistryEntry,
+        user_id: str,
+        user_role: str | None = None,
+        org_id: str | None = None,
+    ) -> dict[str, object]:
         return {"summary": f"{operation.id} executed for {user_id}"}
 
 
