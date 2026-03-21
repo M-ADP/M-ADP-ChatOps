@@ -53,7 +53,12 @@ class WorkflowNodes:
             }
 
         return {
-            "query_result": self.adapter_service.execute_query(operation, state["user_id"]),
+            "query_result": self.adapter_service.execute_query(
+                operation,
+                state["user_id"],
+                user_role=state.get("user_role"),
+                org_id=state.get("org_id"),
+            ),
         }
 
     def interpret_result(self, state: GraphState) -> GraphState:
@@ -97,7 +102,12 @@ class WorkflowNodes:
             }
 
         return {
-            "command_result": self.adapter_service.execute_command(operation, state["user_id"]),
+            "command_result": self.adapter_service.execute_command(
+                operation,
+                state["user_id"],
+                user_role=state.get("user_role"),
+                org_id=state.get("org_id"),
+            ),
             "request_status": "executing",
             "requires_approval": False,
         }
