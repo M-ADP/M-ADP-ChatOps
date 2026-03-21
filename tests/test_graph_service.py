@@ -99,13 +99,17 @@ class FakeRegistryService:
 
 @dataclass
 class FakeAdapterService:
+    last_resolved_inputs: dict[str, object] | None = None
+
     def execute_query(
         self,
         operation: RegistryEntry,
         user_id: str,
         user_role: str | None = None,
         org_id: str | None = None,
+        resolved_inputs: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        self.last_resolved_inputs = resolved_inputs
         return {"summary": f"{operation.id} ok for {user_id}"}
 
     def execute_command(
@@ -114,8 +118,16 @@ class FakeAdapterService:
         user_id: str,
         user_role: str | None = None,
         org_id: str | None = None,
+        resolved_inputs: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        self.last_resolved_inputs = resolved_inputs
         return {"summary": f"{operation.id} executed for {user_id}"}
+
+
+@dataclass
+class FakeResolverService:
+    def resolve(self, operation: RegistryEntry, message_text: str) -> dict[str, object]:
+        return {"body": {"name": "demo"}}
 
 
 fake_graph_service = GraphService(
@@ -170,3 +182,22 @@ def test_command_resume_executes_after_approval() -> None:
     assert result.status == "completed"
     assert result.requires_approval is False
     assert result.final_response == "명령 실행 응답: project.create executed for user-1"
+
+
+def test_command_resume_passes_resolved_inputs_to_adapter() -> None:
+    adapter_service = FakeAdapterService()
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=FakeRegistryService(),
+        adapter_service=adapter_service,
+        resolver_service=FakeResolverService(),
+    )
+
+    graph_service.resume_request(
+        request_id="request-1",
+        session_id="session-1",
+        user_id="user-1",
+        message_text="프로젝트 생성해줘",
+    )
+
+    assert adapter_service.last_resolved_inputs == {"body": {"name": "demo"}}
