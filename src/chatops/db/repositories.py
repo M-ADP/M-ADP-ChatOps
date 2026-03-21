@@ -104,3 +104,13 @@ class RequestEventRepository:
             .order_by(RequestEventRecord.sequence.asc())
         )
         return list(self.session.execute(query).scalars())
+
+    def get_latest_sequence(self, request_id: str) -> int:
+        query = (
+            select(RequestEventRecord.sequence)
+            .where(RequestEventRecord.request_id == request_id)
+            .order_by(RequestEventRecord.sequence.desc())
+            .limit(1)
+        )
+        latest = self.session.execute(query).scalar_one_or_none()
+        return int(latest or 0)
