@@ -6,10 +6,11 @@ from chatops.graph.state import GraphState
 
 
 class WorkflowNodes:
-    def __init__(self, llm_service: Any, registry_service: Any, adapter_service: Any) -> None:
+    def __init__(self, llm_service: Any, registry_service: Any, adapter_service: Any, resolver_service: Any) -> None:
         self.llm_service = llm_service
         self.registry_service = registry_service
         self.adapter_service = adapter_service
+        self.resolver_service = resolver_service
 
     def ingest_request(self, state: GraphState) -> GraphState:
         return {
@@ -52,12 +53,15 @@ class WorkflowNodes:
                 "query_result": {"summary": "적절한 조회 API를 찾지 못했습니다."},
             }
 
+        resolved_inputs = self.resolver_service.resolve(operation, state["message_text"])
         return {
+            "resolved_inputs": resolved_inputs,
             "query_result": self.adapter_service.execute_query(
                 operation,
                 state["user_id"],
                 user_role=state.get("user_role"),
                 org_id=state.get("org_id"),
+                resolved_inputs=resolved_inputs,
             ),
         }
 
@@ -101,12 +105,15 @@ class WorkflowNodes:
                 "requires_approval": False,
             }
 
+        resolved_inputs = self.resolver_service.resolve(operation, state["message_text"])
         return {
+            "resolved_inputs": resolved_inputs,
             "command_result": self.adapter_service.execute_command(
                 operation,
                 state["user_id"],
                 user_role=state.get("user_role"),
                 org_id=state.get("org_id"),
+                resolved_inputs=resolved_inputs,
             ),
             "request_status": "executing",
             "requires_approval": False,
