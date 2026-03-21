@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import re
 from typing import Any
@@ -9,6 +10,8 @@ import yaml
 
 
 TOKEN_PATTERN = re.compile(r"[가-힣A-Za-z0-9_./-]+")
+KEY_VALUE_PATTERN = re.compile(r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(?P<value>[^\s,}]+)")
+JSON_BLOCK_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 MODE_TO_KINDS = {
     "query": {"read"},
     "command": {"write", "delete", "action"},
@@ -138,11 +141,13 @@ class RegistryService:
         capability_tokens = self._expand_tokens(
             self._tokenize(" ".join([entry.summary, entry.capability, *entry.examples]))
         )
+        supplied_fields = self._extract_supplied_fields(user_text)
 
         overlap = query_tokens & entry_tokens
         id_overlap = query_tokens & id_tokens
         capability_overlap = query_tokens & capability_tokens
-        return len(overlap) + (len(id_overlap) * 3) + (len(capability_overlap) * 2)
+        required_input_score = self._score_required_inputs(entry, supplied_fields)
+        return len(overlap) + (len(id_overlap) * 3) + (len(capability_overlap) * 2) + required_input_score
 
     def _tokenize(self, text: str) -> set[str]:
         return {token.lower() for token in TOKEN_PATTERN.findall(text) if token.strip()}
@@ -167,3 +172,42 @@ class RegistryService:
             if token.endswith(suffix) and len(token) > len(suffix):
                 normalized.add(token[: -len(suffix)])
         return {item for item in normalized if item}
+
+    def _extract_supplied_fields(self, user_text: str) -> set[str]:
+        supplied_fields: set[str] = set()
+
+        for match in KEY_VALUE_PATTERN.finditer(user_text):
+            supplied_fields.add(match.group("key"))
+
+        json_match = JSON_BLOCK_PATTERN.search(user_text)
+        if not json_match:
+            return supplied_fields
+
+        try:
+            loaded = json.loads(json_match.group(0))
+        except json.JSONDecodeError:
+            return supplied_fields
+
+        if isinstance(loaded, dict):
+            supplied_fields.update(str(key) for key in loaded.keys())
+        return supplied_fields
+
+    def _score_required_inputs(self, entry: RegistryEntry, supplied_fields: set[str]) -> int:
+        if not supplied_fields:
+            return 0
+
+        score = 0
+        required_inputs = entry.required_inputs
+        for field in required_inputs.get("path", []):
+            if str(field.get("name", "")) in supplied_fields:
+                score += 2
+        for field in required_inputs.get("query", []):
+            if str(field.get("name", "")) in supplied_fields:
+                score += 2
+
+        body_spec = required_inputs.get("body")
+        if isinstance(body_spec, dict):
+            for field_name in body_spec.get("required_fields", []):
+                if str(field_name) in supplied_fields:
+                    score += 2
+        return score
