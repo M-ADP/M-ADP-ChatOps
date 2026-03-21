@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     database_url: str
     groq_api_key: str
     groq_model: str = "llama-3.3-70b-versatile"
+    resource_server_base_url: str = "http://localhost:8001"
+    user_server_base_url: str = "http://localhost:8002"
+    application_server_base_url: str = "http://localhost:8003"
+    use_fake_downstream_client: bool = True
     request_stream_keepalive_seconds: int = 15
     approval_ttl_seconds: int = 900
     downstream_timeout_seconds: int = 10
