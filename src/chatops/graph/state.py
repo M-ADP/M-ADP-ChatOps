@@ -22,6 +22,7 @@ class GraphState(TypedDict, total=False):
     route: str
     selected_operation_ids: list[str]
     selected_operation: RegistryEntry | None
+    resolved_inputs: dict[str, Any] | None
     query_result: dict[str, Any] | None
     command_result: dict[str, Any] | None
     final_response: str | None
