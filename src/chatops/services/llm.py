@@ -1,0 +1,13 @@
+from __future__ import annotations
+
+from typing import Any, Protocol
+
+
+class LLMService(Protocol):
+    def classify(self, message_text: str) -> dict[str, Any]: ...
+
+    def answer_inquiry(self, message_text: str) -> str: ...
+
+    def interpret_query_result(self, message_text: str, raw_result: dict[str, Any]) -> str: ...
+
+    def plan_command(self, message_text: str, operation_ids: list[str]) -> str: ...
