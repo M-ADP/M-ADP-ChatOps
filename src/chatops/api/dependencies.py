@@ -14,6 +14,7 @@ from chatops.services.adapters import DownstreamAdapterService
 from chatops.services.auth import build_auth_context
 from chatops.services.llm import GroqLLMService
 from chatops.services.registry import RegistryService
+from chatops.services.resolver import ParameterResolverService
 
 
 @lru_cache(maxsize=1)
@@ -55,6 +56,7 @@ def get_graph_service() -> GraphService:
             timeout_seconds=settings.downstream_timeout_seconds,
             use_fake=settings.use_fake_downstream_client,
         ),
+        resolver_service=ParameterResolverService(),
     )
 
 
