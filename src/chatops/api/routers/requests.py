@@ -14,6 +14,7 @@ from chatops.schemas.requests import (
     RejectRequestResponse,
     RequestResponse,
 )
+from chatops.services.events import EventService
 
 
 router = APIRouter(prefix="/sessions/{session_id}/requests", tags=["requests"])
@@ -55,6 +56,44 @@ def create_request(
     record.final_response = graph_result.final_response
     db_session.commit()
     db_session.refresh(record)
+    event_service = EventService(db_session)
+    event_service.append_event(
+        request_id=record.id,
+        session_id=record.session_id,
+        event_type="request.created",
+        payload={
+            "type": "request.created",
+            "request_id": record.id,
+            "session_id": record.session_id,
+            "status": record.status,
+        },
+    )
+    if record.status == "pending_approval":
+        event_service.append_event(
+            request_id=record.id,
+            session_id=record.session_id,
+            event_type="approval.required",
+            payload={
+                "type": "approval.required",
+                "request_id": record.id,
+                "session_id": record.session_id,
+                "status": record.status,
+                "final_response": record.final_response,
+            },
+        )
+    else:
+        event_service.append_event(
+            request_id=record.id,
+            session_id=record.session_id,
+            event_type="response.completed",
+            payload={
+                "type": "response.completed",
+                "request_id": record.id,
+                "session_id": record.session_id,
+                "status": record.status,
+                "final_response": record.final_response,
+            },
+        )
 
     return RequestResponse(
         request_id=record.id,
@@ -100,6 +139,7 @@ def approve_request(
     request_id: str,
     auth: AuthContext = Depends(get_auth_context),
     db_session: Session = Depends(get_db_session),
+    graph_service: GraphService = Depends(get_graph_service),
 ) -> ApproveRequestResponse:
     session_record = SessionRepository(db_session).get_for_user(session_id=session_id, user_id=auth.user_id)
     if session_record is None:
@@ -110,7 +150,30 @@ def approve_request(
     if record.status != "pending_approval":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Request is not pending approval")
 
-    updated = repo.update_status(request_id=request_id, status="approved")
+    graph_result = graph_service.resume_request(
+        request_id=request_id,
+        session_id=session_id,
+        user_id=auth.user_id,
+        message_text=record.message_text,
+    )
+    record.status = graph_result.status
+    record.final_response = graph_result.final_response
+    record.requires_approval = graph_result.requires_approval
+    db_session.commit()
+    db_session.refresh(record)
+    EventService(db_session).append_event(
+        request_id=record.id,
+        session_id=record.session_id,
+        event_type="execution.completed" if record.status == "completed" else "execution.failed",
+        payload={
+            "type": "execution.completed" if record.status == "completed" else "execution.failed",
+            "request_id": record.id,
+            "session_id": record.session_id,
+            "status": record.status,
+            "final_response": record.final_response,
+        },
+    )
+    updated = record
     return ApproveRequestResponse(request_id=updated.id, status=updated.status)
 
 
@@ -131,4 +194,15 @@ def reject_request(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Request is not pending approval")
 
     updated = repo.update_status(request_id=request_id, status="rejected")
+    EventService(db_session).append_event(
+        request_id=updated.id,
+        session_id=updated.session_id,
+        event_type="approval.rejected",
+        payload={
+            "type": "approval.rejected",
+            "request_id": updated.id,
+            "session_id": updated.session_id,
+            "status": updated.status,
+        },
+    )
     return RejectRequestResponse(request_id=updated.id, status=updated.status)
