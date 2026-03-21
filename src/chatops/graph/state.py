@@ -9,6 +9,8 @@ class GraphState(TypedDict, total=False):
     request_id: str
     session_id: str
     user_id: str
+    user_role: str | None
+    org_id: str | None
     message_text: str
     approval_granted: bool
     request_type: str
