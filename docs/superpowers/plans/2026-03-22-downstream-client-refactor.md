@@ -6,7 +6,7 @@
 
 **아키텍처:** 기존 `DownstreamAdapterService`의 generic HTTP 호출 책임을 해체하고, operation id 기반 dispatch table과 도메인별 client interface를 도입한다. API dependency는 fake/real client를 선택하고, graph는 얇은 dispatcher만 의존하도록 변경한다. 환경 변수 로딩은 `/vault/secrets/.env` 우선 규칙을 유지하면서 서버별 config 파일로 분리한다.
 
-**기술 스택:** Python 3.10+, FastAPI, Pydantic v2, Pydantic Settings, aiohttp, LangGraph, SQLAlchemy, pytest
+**기술 스택:** Python 3.12+, FastAPI, Pydantic v2, Pydantic Settings, aiohttp, LangGraph, SQLAlchemy, pytest
 
 ---
 
