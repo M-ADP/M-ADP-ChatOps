@@ -20,13 +20,16 @@ KOREAN_SUFFIXES = ("해주세요", "해줘", "하세요", "해라", "하기", "�
 TOKEN_ALIASES = {
     "project": {"project", "프로젝트"},
     "프로젝트": {"project", "프로젝트"},
+    "projects": {"project", "projects", "프로젝트"},
     "application": {"application", "app", "apps", "애플리케이션", "앱"},
     "app": {"application", "app", "apps", "애플리케이션", "앱"},
     "앱": {"application", "app", "apps", "애플리케이션", "앱"},
     "list": {"list", "목록", "리스트", "보여줘", "조회"},
     "목록": {"list", "목록", "리스트", "보여줘", "조회"},
+    "리스트": {"list", "목록", "리스트", "보여줘", "조회"},
     "보여줘": {"list", "목록", "리스트", "보여줘", "조회"},
     "조회": {"list", "목록", "리스트", "보여줘", "조회"},
+    "알려줘": {"list", "목록", "리스트", "보여줘", "조회", "알려줘"},
     "get": {"get", "조회", "상태", "보여줘"},
     "create": {"create", "생성", "만들어", "만들", "추가"},
     "생성": {"create", "생성", "만들어", "만들", "추가"},
@@ -34,6 +37,7 @@ TOKEN_ALIASES = {
     "삭제": {"delete", "삭제", "제거", "지워"},
     "update": {"update", "수정", "변경", "업데이트"},
     "member": {"member", "멤버", "구성원"},
+    "members": {"member", "members", "멤버", "구성원"},
     "status": {"status", "상태"},
     "traffic": {"traffic", "트래픽"},
 }
@@ -106,6 +110,7 @@ class RegistryEntry:
 class RegistryService:
     def __init__(self, entries: list[RegistryEntry]) -> None:
         self.entries = tuple(entries)
+        self.entries_by_id = {entry.id: entry for entry in self.entries}
 
     @classmethod
     def from_directory(cls, directory: str | Path) -> "RegistryService":
@@ -123,6 +128,11 @@ class RegistryService:
             key=lambda entry: (-self._score(entry, user_text), entry.id),
         )
         return scored[:limit]
+
+    def get_entry(self, entry_id: str | None) -> RegistryEntry | None:
+        if not entry_id:
+            return None
+        return self.entries_by_id.get(entry_id)
 
     def _matches_mode(self, entry: RegistryEntry, usable_in: str) -> bool:
         allowed_kinds = MODE_TO_KINDS.get(usable_in, set())
@@ -193,21 +203,36 @@ class RegistryService:
         return supplied_fields
 
     def _score_required_inputs(self, entry: RegistryEntry, supplied_fields: set[str]) -> int:
-        if not supplied_fields:
-            return 0
-
         score = 0
         required_inputs = entry.required_inputs
+        required_field_names: set[str] = set()
+
         for field in required_inputs.get("path", []):
-            if str(field.get("name", "")) in supplied_fields:
+            field_name = str(field.get("name", ""))
+            if field_name:
+                required_field_names.add(field_name)
+            if field_name in supplied_fields:
                 score += 2
         for field in required_inputs.get("query", []):
-            if str(field.get("name", "")) in supplied_fields:
+            if not field.get("required", False):
+                continue
+            field_name = str(field.get("name", ""))
+            if field_name:
+                required_field_names.add(field_name)
+            if field_name in supplied_fields:
                 score += 2
 
         body_spec = required_inputs.get("body")
         if isinstance(body_spec, dict):
             for field_name in body_spec.get("required_fields", []):
-                if str(field_name) in supplied_fields:
+                normalized = str(field_name)
+                required_field_names.add(normalized)
+                if normalized in supplied_fields:
                     score += 2
+
+        if not required_field_names:
+            return score + 2
+
+        missing_required = required_field_names - supplied_fields
+        score -= len(missing_required) * 2
         return score
