@@ -20,7 +20,7 @@ class SessionRepository:
         self.session.refresh(record)
         return record
 
-    def get_for_user(self, session_id: str, user_id: str) -> SessionRecord | None:
+    def get_for_user(self, session_id: int, user_id: str) -> SessionRecord | None:
         query = select(SessionRecord).where(
             SessionRecord.id == session_id,
             SessionRecord.user_id == user_id,
@@ -34,13 +34,14 @@ class RequestRepository:
 
     def create(
         self,
-        session_id: str,
+        session_id: int,
         user_id: str,
         message_text: str,
+        request_id: int | None = None,
         request_type: str | None = None,
         requires_approval: bool = False,
     ) -> RequestRecord:
-        record = RequestRecord(
+        payload = dict(
             session_id=session_id,
             user_id=user_id,
             message_text=message_text,
@@ -48,19 +49,22 @@ class RequestRepository:
             status=RequestStatus.CREATED.value,
             requires_approval=requires_approval,
         )
+        if request_id is not None:
+            payload["id"] = request_id
+        record = RequestRecord(**payload)
         self.session.add(record)
         self.session.commit()
         self.session.refresh(record)
         return record
 
-    def get_for_user(self, request_id: str, user_id: str) -> RequestRecord | None:
+    def get_for_user(self, request_id: int, user_id: str) -> RequestRecord | None:
         query = select(RequestRecord).where(
             RequestRecord.id == request_id,
             RequestRecord.user_id == user_id,
         )
         return self.session.execute(query).scalar_one_or_none()
 
-    def update_status(self, request_id: str, status: str) -> RequestRecord | None:
+    def update_status(self, request_id: int, status: str) -> RequestRecord | None:
         record = self.session.get(RequestRecord, request_id)
         if record is None:
             return None
@@ -76,8 +80,8 @@ class RequestEventRepository:
 
     def append(
         self,
-        request_id: str,
-        session_id: str,
+        request_id: int,
+        session_id: int,
         sequence: int,
         event_type: str,
         payload: str,
@@ -94,7 +98,7 @@ class RequestEventRepository:
         self.session.refresh(record)
         return record
 
-    def list_after_sequence(self, request_id: str, sequence: int) -> list[RequestEventRecord]:
+    def list_after_sequence(self, request_id: int, sequence: int) -> list[RequestEventRecord]:
         query = (
             select(RequestEventRecord)
             .where(
@@ -105,7 +109,7 @@ class RequestEventRepository:
         )
         return list(self.session.execute(query).scalars())
 
-    def get_latest_sequence(self, request_id: str) -> int:
+    def get_latest_sequence(self, request_id: int) -> int:
         query = (
             select(RequestEventRecord.sequence)
             .where(RequestEventRecord.request_id == request_id)
