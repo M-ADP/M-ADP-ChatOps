@@ -157,6 +157,7 @@ def approve_request(
         session_id=session_id,
         user_id=auth.user_id,
         message_text=record.message_text,
+        approval_granted=True,
         user_role=auth.user_role,
         org_id=auth.org_id,
     )
@@ -187,17 +188,31 @@ def reject_request(
     request_id: int,
     auth: AuthContext = Depends(get_auth_context),
     db_session: Session = Depends(get_db_session),
+    graph_service: GraphService = Depends(get_graph_service),
 ) -> RejectRequestResponse:
     session_record = SessionRepository(db_session).get_for_user(session_id=session_id, user_id=auth.user_id)
     if session_record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    repo = RequestRepository(db_session)
     record = _load_request_or_404(db_session, request_id=request_id, user_id=auth.user_id)
     if record.status != "pending_approval":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Request is not pending approval")
 
-    updated = repo.update_status(request_id=request_id, status="rejected")
+    graph_result = graph_service.resume_request(
+        request_id=request_id,
+        session_id=session_id,
+        user_id=auth.user_id,
+        message_text=record.message_text,
+        approval_granted=False,
+        user_role=auth.user_role,
+        org_id=auth.org_id,
+    )
+    record.status = graph_result.status
+    record.final_response = graph_result.final_response
+    record.requires_approval = graph_result.requires_approval
+    db_session.commit()
+    db_session.refresh(record)
+    updated = record
     EventService(db_session).append_event(
         request_id=updated.id,
         session_id=updated.session_id,
