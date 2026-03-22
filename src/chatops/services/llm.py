@@ -5,6 +5,10 @@ from typing import Any, Protocol
 
 import httpx
 
+INQUIRY_MARKERS = ("방법", "어떻게", "가이드", "설명", "사용법")
+COMMAND_MARKERS = ("생성", "삭제", "수정", "변경", "추가", "제거", "중지", "재시작", "배포", "실행", "등록")
+QUERY_MARKERS = ("목록", "리스트", "조회", "상태", "보여", "알려", "확인", "트래픽", "로그", "상세")
+
 
 class LLMService(Protocol):
     def classify(self, message_text: str) -> dict[str, Any]: ...
@@ -46,12 +50,13 @@ class GroqLLMService:
             response_format={"type": "json_object"},
         )
         parsed = json.loads(content)
-        return {
+        result = {
             "request_type": parsed["request_type"],
             "intent": parsed.get("intent", ""),
             "classification_reason": parsed.get("classification_reason", ""),
             "classification_confidence": float(parsed.get("classification_confidence", 0.0)),
         }
+        return self._apply_classification_guardrails(message_text, result)
 
     def answer_inquiry(self, message_text: str) -> str:
         return self._chat_completion(
@@ -116,3 +121,32 @@ class GroqLLMService:
         response.raise_for_status()
         body = response.json()
         return str(body["choices"][0]["message"]["content"]).strip()
+
+    def _apply_classification_guardrails(
+        self,
+        message_text: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = message_text.lower()
+        forced_type: str | None = None
+        forced_intent: str | None = None
+
+        if any(marker in normalized for marker in INQUIRY_MARKERS):
+            forced_type = "inquiry"
+            forced_intent = "answer_inquiry"
+        elif any(marker in normalized for marker in COMMAND_MARKERS):
+            forced_type = "command"
+            forced_intent = "execute_command"
+        elif any(marker in normalized for marker in QUERY_MARKERS):
+            forced_type = "query"
+            forced_intent = "query_status"
+
+        if forced_type is None or forced_type == result["request_type"]:
+            return result
+
+        return {
+            "request_type": forced_type,
+            "intent": forced_intent,
+            "classification_reason": f"정책 가드레일로 {forced_type} 요청으로 조정",
+            "classification_confidence": max(float(result.get("classification_confidence", 0.0)), 0.99),
+        }
