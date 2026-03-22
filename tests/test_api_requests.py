@@ -33,14 +33,14 @@ class StubGraphService:
 
     def handle_request(
         self,
-        session_id: str,
+        session_id: int,
         user_id: str,
         message_text: str,
         user_role: str | None = None,
         org_id: str | None = None,
     ) -> GraphResult:
         return GraphResult(
-            request_id="request-1",
+            request_id=2001,
             session_id=session_id,
             user_id=user_id,
             status=self.status,
@@ -53,8 +53,8 @@ class StubGraphService:
 
     def resume_request(
         self,
-        request_id: str,
-        session_id: str,
+        request_id: int,
+        session_id: int,
         user_id: str,
         message_text: str,
         user_role: str | None = None,
@@ -102,6 +102,8 @@ def test_request_repository_updates_status(db_session) -> None:
     updated = repo.update_status(request.id, RequestStatus.PENDING_APPROVAL.value)
 
     assert updated is not None
+    assert isinstance(request.id, int)
+    assert request.id > 0
     assert updated.status == RequestStatus.PENDING_APPROVAL.value
 
 
@@ -131,6 +133,7 @@ def test_request_event_repository_lists_after_sequence(db_session) -> None:
 
     events = repo.list_after_sequence(request.id, 1)
 
+    assert isinstance(second.id, int)
     assert [event.id for event in events] == [second.id]
 
 
@@ -170,13 +173,13 @@ def test_request_schemas_and_auth_context_match_contract() -> None:
     )
     create_payload = CreateRequestRequest(message="프로젝트 생성해줘")
     request_response = RequestResponse(
-        request_id="request-1",
-        session_id="session-1",
+        request_id=2001,
+        session_id=1001,
         status="processing",
         message=create_payload.message,
     )
-    approved = ApproveRequestResponse(request_id="request-1", status="approved")
-    rejected = RejectRequestResponse(request_id="request-1", status="rejected")
+    approved = ApproveRequestResponse(request_id=2001, status="approved")
+    rejected = RejectRequestResponse(request_id=2001, status="rejected")
     event = RequestEventResponse(
         sequence=2,
         type="response.completed",
@@ -206,6 +209,7 @@ def test_create_request_returns_processing_status(client: TestClient) -> None:
     )
 
     assert response.status_code == 202
+    assert isinstance(response.json()["request_id"], int)
     assert response.json()["status"] in {"processing", "pending_approval"}
 
 
