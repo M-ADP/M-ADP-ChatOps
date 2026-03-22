@@ -23,7 +23,7 @@ def test_settings_have_required_defaults() -> None:
 
 def test_settings_require_database_url_and_groq_api_key() -> None:
     with pytest.raises(ValidationError):
-        Settings()
+        Settings(_env_file=None)
 
 
 def test_resolve_env_file_prefers_vault_path(tmp_path: Path) -> None:
