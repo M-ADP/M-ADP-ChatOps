@@ -10,7 +10,7 @@ class CreateSessionRequest(BaseModel):
 
 
 class SessionResponse(BaseModel):
-    session_id: str
+    session_id: int
     user_id: str
     title: str | None = None
     status: str
