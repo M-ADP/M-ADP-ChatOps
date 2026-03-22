@@ -42,34 +42,36 @@ class FakeLLMService:
 
 @dataclass
 class FakeRegistryService:
-    def find_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[RegistryEntry]:
-        if usable_in == "query":
-            return [
-                RegistryEntry(
-                    id="monitoring.get_app_deployment_traffic",
-                    source_file="ai_registry/monitoring.get_app_deployment_traffic.ai.yaml",
-                    operation_id="get_app_deployment_traffic",
-                    path="/monitoring/apps/traffic",
-                    method="GET",
-                    summary="앱 트래픽 조회",
-                    capability="앱 트래픽 조회",
-                    usable_in=("query",),
-                    operation_kind="read",
-                    when_to_use=("트래픽 조회",),
-                    when_not_to_use=(),
-                    requires_confirmation=False,
-                    risk_level="low",
-                    side_effects=(),
-                    required_headers=("X-User-Id",),
-                    required_inputs={},
-                    preconditions=(),
-                    missing_info_questions=(),
-                    response_interpretation="트래픽 요약",
-                    plan_template=(),
-                    examples=(),
-                )
-            ]
+    calls: list[tuple[str, str]] | None = None
 
+    def _query_entries(self) -> list[RegistryEntry]:
+        return [
+            RegistryEntry(
+                id="monitoring.get_app_deployment_traffic",
+                source_file="ai_registry/monitoring.get_app_deployment_traffic.ai.yaml",
+                operation_id="get_app_deployment_traffic",
+                path="/monitoring/apps/traffic",
+                method="GET",
+                summary="앱 트래픽 조회",
+                capability="앱 트래픽 조회",
+                usable_in=("query",),
+                operation_kind="read",
+                when_to_use=("트래픽 조회",),
+                when_not_to_use=(),
+                requires_confirmation=False,
+                risk_level="low",
+                side_effects=(),
+                required_headers=("X-User-Id",),
+                required_inputs={},
+                preconditions=(),
+                missing_info_questions=(),
+                response_interpretation="트래픽 요약",
+                plan_template=(),
+                examples=(),
+            )
+        ]
+
+    def _command_entries(self) -> list[RegistryEntry]:
         return [
             RegistryEntry(
                 id="project.create",
@@ -95,6 +97,20 @@ class FakeRegistryService:
                 examples=(),
             )
         ]
+
+    def find_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[RegistryEntry]:
+        if self.calls is None:
+            self.calls = []
+        self.calls.append((usable_in, user_text))
+        if usable_in == "query":
+            return self._query_entries()
+        return self._command_entries()
+
+    def get_entry(self, entry_id: str) -> RegistryEntry | None:
+        for candidate in self._command_entries() + self._query_entries():
+            if candidate.id == entry_id:
+                return candidate
+        return None
 
 
 @dataclass
@@ -176,11 +192,17 @@ def test_command_request_stops_at_pending_approval() -> None:
 
 
 def test_command_resume_executes_after_approval() -> None:
-    result = fake_graph_service.resume_request(
-        request_id=2001,
+    pending = fake_graph_service.handle_request(
         session_id=1001,
         user_id="user-1",
         message_text="프로젝트 생성해줘",
+    )
+    result = fake_graph_service.resume_request(
+        request_id=pending.request_id,
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 생성해줘",
+        approval_granted=True,
     )
 
     assert result.status == "completed"
@@ -190,18 +212,54 @@ def test_command_resume_executes_after_approval() -> None:
 
 def test_command_resume_passes_resolved_inputs_to_adapter() -> None:
     adapter_service = FakeAdapterService()
+    registry_service = FakeRegistryService()
     graph_service = GraphService(
         llm_service=FakeLLMService(),
-        registry_service=FakeRegistryService(),
+        registry_service=registry_service,
         adapter_service=adapter_service,
         resolver_service=FakeResolverService(),
     )
 
-    graph_service.resume_request(
-        request_id=2001,
+    pending = graph_service.handle_request(
         session_id=1001,
         user_id="user-1",
         message_text="프로젝트 생성해줘",
     )
+    graph_service.resume_request(
+        request_id=pending.request_id,
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 생성해줘",
+        approval_granted=True,
+    )
 
     assert adapter_service.last_resolved_inputs == {"body": {"name": "demo"}}
+    assert registry_service.calls == [("command", "프로젝트 생성해줘")]
+
+
+def test_command_resume_rejects_without_replanning() -> None:
+    registry_service = FakeRegistryService()
+    adapter_service = FakeAdapterService()
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=registry_service,
+        adapter_service=adapter_service,
+        resolver_service=FakeResolverService(),
+    )
+
+    pending = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 생성해줘",
+    )
+    result = graph_service.resume_request(
+        request_id=pending.request_id,
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 생성해줘",
+        approval_granted=False,
+    )
+
+    assert result.status == "rejected"
+    assert adapter_service.last_resolved_inputs is None
+    assert registry_service.calls == [("command", "프로젝트 생성해줘")]
