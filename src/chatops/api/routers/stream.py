@@ -23,8 +23,8 @@ def _format_sse_body(events) -> str:
 
 @router.get("/{request_id}/stream")
 def stream_request(
-    session_id: str,
-    request_id: str,
+    session_id: int,
+    request_id: int,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     auth: AuthContext = Depends(get_auth_context),
     db_session: Session = Depends(get_db_session),
