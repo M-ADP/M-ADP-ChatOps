@@ -114,10 +114,10 @@ class FakeRegistryService:
 
 
 @dataclass
-class FakeAdapterService:
+class FakeDownstreamDispatcher:
     last_resolved_inputs: dict[str, object] | None = None
 
-    def execute_query(
+    async def execute_query(
         self,
         operation: RegistryEntry,
         user_id: str,
@@ -128,7 +128,7 @@ class FakeAdapterService:
         self.last_resolved_inputs = resolved_inputs
         return {"summary": f"{operation.id} ok for {user_id}"}
 
-    def execute_command(
+    async def execute_command(
         self,
         operation: RegistryEntry,
         user_id: str,
@@ -149,7 +149,7 @@ class FakeResolverService:
 fake_graph_service = GraphService(
     llm_service=FakeLLMService(),
     registry_service=FakeRegistryService(),
-    adapter_service=FakeAdapterService(),
+    adapter_service=FakeDownstreamDispatcher(),
 )
 
 
@@ -211,7 +211,7 @@ def test_command_resume_executes_after_approval() -> None:
 
 
 def test_command_resume_passes_resolved_inputs_to_adapter() -> None:
-    adapter_service = FakeAdapterService()
+    adapter_service = FakeDownstreamDispatcher()
     registry_service = FakeRegistryService()
     graph_service = GraphService(
         llm_service=FakeLLMService(),
@@ -239,7 +239,7 @@ def test_command_resume_passes_resolved_inputs_to_adapter() -> None:
 
 def test_command_resume_rejects_without_replanning() -> None:
     registry_service = FakeRegistryService()
-    adapter_service = FakeAdapterService()
+    adapter_service = FakeDownstreamDispatcher()
     graph_service = GraphService(
         llm_service=FakeLLMService(),
         registry_service=registry_service,
