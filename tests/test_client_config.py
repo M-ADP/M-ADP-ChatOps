@@ -40,6 +40,19 @@ def test_resolve_env_file_prefers_vault_path(tmp_path: Path) -> None:
     assert resolved == vault_file
 
 
+def test_groq_config_reads_groq_prefixed_env_file(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "GROQ_API_KEY=groq-test-key\nGROQ_MODEL=llama-test\n",
+        encoding="utf-8",
+    )
+
+    groq_config = GroqConfig(_env_file=env_file)
+
+    assert groq_config.api_key == "groq-test-key"
+    assert groq_config.model == "llama-test"
+
+
 @pytest.mark.anyio
 async def test_fake_clients_return_predictable_payloads() -> None:
     project_client = FakeProjectClientImpl()
