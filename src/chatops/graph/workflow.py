@@ -10,7 +10,7 @@ class GraphWorkflow:
     def __init__(self, nodes: WorkflowNodes) -> None:
         self.nodes = nodes
 
-    def compile(self):
+    def compile(self, checkpointer=None):
         graph = StateGraph(GraphState)
         graph.add_node("ingest_request", self.nodes.ingest_request)
         graph.add_node("classify_request", self.nodes.classify_request)
@@ -21,7 +21,6 @@ class GraphWorkflow:
         graph.add_node("interpret_result", self.nodes.interpret_result)
         graph.add_node("plan_command", self.nodes.plan_command)
         graph.add_node("wait_for_approval", self.nodes.wait_for_approval)
-        graph.add_node("resume_after_approval", self.nodes.resume_after_approval)
         graph.add_node("execute_command", self.nodes.execute_command)
         graph.add_node("respond_command", self.nodes.respond_command)
 
@@ -41,16 +40,16 @@ class GraphWorkflow:
         graph.add_edge("prepare_query", "execute_query")
         graph.add_edge("execute_query", "interpret_result")
         graph.add_edge("interpret_result", END)
+        graph.add_edge("plan_command", "wait_for_approval")
         graph.add_conditional_edges(
-            "plan_command",
-            lambda state: "approved" if state.get("approval_granted") else "pending_approval",
+            "wait_for_approval",
+            lambda state: "approved" if state.get("approval_granted") else "rejected",
             {
                 "approved": "execute_command",
-                "pending_approval": "wait_for_approval",
+                "rejected": END,
             },
         )
-        graph.add_edge("wait_for_approval", END)
         graph.add_edge("execute_command", "respond_command")
         graph.add_edge("respond_command", END)
 
-        return graph.compile()
+        return graph.compile(checkpointer=checkpointer)
