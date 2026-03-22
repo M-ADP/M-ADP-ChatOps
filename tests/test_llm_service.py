@@ -68,3 +68,75 @@ def test_groq_llm_service_generates_plain_text() -> None:
     result = service.answer_inquiry("프로젝트 생성 방법 알려줘")
 
     assert result == "문의 응답 텍스트"
+
+
+def test_groq_llm_service_applies_query_guardrail_when_llm_misclassifies() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "request_type": "command",
+                                    "intent": "execute_command",
+                                    "classification_reason": "실행 요청",
+                                    "classification_confidence": 0.61,
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    service = GroqLLMService(
+        api_key="test-key",
+        model="llama-3.3-70b-versatile",
+        timeout_seconds=10,
+        client=client,
+    )
+
+    result = service.classify("프로젝트 목록 보여줘")
+
+    assert result["request_type"] == "query"
+    assert result["intent"] == "query_status"
+
+
+def test_groq_llm_service_applies_inquiry_guardrail_for_how_to_questions() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "request_type": "command",
+                                    "intent": "execute_command",
+                                    "classification_reason": "실행 요청",
+                                    "classification_confidence": 0.71,
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    service = GroqLLMService(
+        api_key="test-key",
+        model="llama-3.3-70b-versatile",
+        timeout_seconds=10,
+        client=client,
+    )
+
+    result = service.classify("프로젝트 생성 방법 알려줘")
+
+    assert result["request_type"] == "inquiry"
+    assert result["intent"] == "answer_inquiry"
