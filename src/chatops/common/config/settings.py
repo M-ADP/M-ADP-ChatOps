@@ -74,7 +74,7 @@ class GroqConfig(LoggedSettings):
     model_config = SettingsConfigDict(
         env_file=str(resolve_env_file()),
         env_file_encoding="utf-8",
-        env_prefix="",
+        env_prefix="GROQ_",
         extra="ignore",
     )
 
