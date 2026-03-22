@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
-from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
+from chatops.common.id_generator import IdGenerator
 from chatops.db.base import Base
 from chatops.domain.enums import RequestStatus, RequestType, SessionStatus
 
@@ -15,7 +15,7 @@ def _utc_now() -> datetime:
 class SessionRecord(Base):
     __tablename__ = "sessions"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=IdGenerator.generate_sonyflake_id)
     user_id: Mapped[str] = mapped_column(String(255), index=True)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default=SessionStatus.ACTIVE.value)
@@ -30,8 +30,8 @@ class SessionRecord(Base):
 class RequestRecord(Base):
     __tablename__ = "requests"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), index=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=IdGenerator.generate_sonyflake_id)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"), index=True)
     user_id: Mapped[str] = mapped_column(String(255), index=True)
     message_text: Mapped[str] = mapped_column(Text())
     request_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -50,9 +50,9 @@ class RequestEventRecord(Base):
     __tablename__ = "request_events"
     __table_args__ = (UniqueConstraint("request_id", "sequence", name="uq_request_events_request_id_sequence"),)
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    request_id: Mapped[str] = mapped_column(ForeignKey("requests.id"), index=True)
-    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), index=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=IdGenerator.generate_sonyflake_id)
+    request_id: Mapped[int] = mapped_column(ForeignKey("requests.id"), index=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"), index=True)
     sequence: Mapped[int] = mapped_column(Integer)
     event_type: Mapped[str] = mapped_column(String(64))
     payload: Mapped[str] = mapped_column(Text())
