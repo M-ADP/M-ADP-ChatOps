@@ -29,6 +29,8 @@ def test_create_session_persists_owner(db_session) -> None:
 
     session = repo.create(user_id="user-1", title=None)
 
+    assert isinstance(session.id, int)
+    assert session.id > 0
     assert session.user_id == "user-1"
     assert session.status == "active"
 
@@ -43,14 +45,14 @@ def test_build_auth_context_requires_x_user_id() -> None:
 def test_session_schemas_use_api_contract_fields() -> None:
     payload = CreateSessionRequest(title="운영 세션")
     response = SessionResponse(
-        session_id="session-1",
+        session_id=1001,
         user_id="user-1",
         title=payload.title,
         status="active",
     )
 
     assert payload.model_dump() == {"title": "운영 세션"}
-    assert response.model_dump()["session_id"] == "session-1"
+    assert response.model_dump()["session_id"] == 1001
 
 
 def test_create_session_returns_owned_session(client: TestClient) -> None:
@@ -62,5 +64,6 @@ def test_create_session_returns_owned_session(client: TestClient) -> None:
 
     assert response.status_code == 201
     body = response.json()
+    assert isinstance(body["session_id"], int)
     assert body["user_id"] == "user-1"
     assert body["status"] == "active"
