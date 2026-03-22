@@ -31,7 +31,7 @@ def create_session(
 
 @router.get("/{session_id}", response_model=SessionResponse)
 def get_session(
-    session_id: str,
+    session_id: int,
     auth: AuthContext = Depends(get_auth_context),
     db_session: Session = Depends(get_db_session),
 ) -> SessionResponse:
