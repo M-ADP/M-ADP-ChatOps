@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from sqlalchemy import create_engine, inspect
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,3 +26,16 @@ def test_alembic_upgrade_head_runs(tmp_path: Path) -> None:
     )
 
     assert completed.returncode == 0, completed.stderr
+
+    engine = create_engine(f"sqlite:///{database_path}")
+    inspector = inspect(engine)
+    sessions_columns = {column["name"]: column for column in inspector.get_columns("sessions")}
+    requests_columns = {column["name"]: column for column in inspector.get_columns("requests")}
+    request_events_columns = {column["name"]: column for column in inspector.get_columns("request_events")}
+
+    assert sessions_columns["id"]["type"].python_type is int
+    assert requests_columns["id"]["type"].python_type is int
+    assert requests_columns["session_id"]["type"].python_type is int
+    assert request_events_columns["id"]["type"].python_type is int
+    assert request_events_columns["request_id"]["type"].python_type is int
+    assert request_events_columns["session_id"]["type"].python_type is int
