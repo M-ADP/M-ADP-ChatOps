@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from langgraph.types import interrupt
@@ -8,10 +9,16 @@ from chatops.graph.state import GraphState
 
 
 class WorkflowNodes:
-    def __init__(self, llm_service: Any, registry_service: Any, adapter_service: Any, resolver_service: Any) -> None:
+    def __init__(
+        self,
+        llm_service: Any,
+        registry_service: Any,
+        downstream_dispatcher: Any,
+        resolver_service: Any,
+    ) -> None:
         self.llm_service = llm_service
         self.registry_service = registry_service
-        self.adapter_service = adapter_service
+        self.downstream_dispatcher = downstream_dispatcher
         self.resolver_service = resolver_service
 
     def ingest_request(self, state: GraphState) -> GraphState:
@@ -59,12 +66,14 @@ class WorkflowNodes:
         resolved_inputs = self.resolver_service.resolve(operation, state["message_text"])
         return {
             "resolved_inputs": resolved_inputs,
-            "query_result": self.adapter_service.execute_query(
-                operation,
-                state["user_id"],
-                user_role=state.get("user_role"),
-                org_id=state.get("org_id"),
-                resolved_inputs=resolved_inputs,
+            "query_result": self._run_awaitable(
+                self.downstream_dispatcher.execute_query(
+                    operation,
+                    state["user_id"],
+                    user_role=state.get("user_role"),
+                    org_id=state.get("org_id"),
+                    resolved_inputs=resolved_inputs,
+                )
             ),
         }
 
@@ -120,12 +129,14 @@ class WorkflowNodes:
         resolved_inputs = self.resolver_service.resolve(operation, state["message_text"])
         return {
             "resolved_inputs": resolved_inputs,
-            "command_result": self.adapter_service.execute_command(
-                operation,
-                state["user_id"],
-                user_role=state.get("user_role"),
-                org_id=state.get("org_id"),
-                resolved_inputs=resolved_inputs,
+            "command_result": self._run_awaitable(
+                self.downstream_dispatcher.execute_command(
+                    operation,
+                    state["user_id"],
+                    user_role=state.get("user_role"),
+                    org_id=state.get("org_id"),
+                    resolved_inputs=resolved_inputs,
+                )
             ),
             "request_status": "executing",
             "requires_approval": False,
@@ -145,3 +156,10 @@ class WorkflowNodes:
             "request_status": "completed",
             "requires_approval": False,
         }
+
+    def _run_awaitable(self, awaitable):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(awaitable)
+        raise RuntimeError("async downstream 호출은 현재 sync workflow에서만 지원합니다.")

@@ -31,7 +31,8 @@ class GraphService:
         self,
         llm_service,
         registry_service,
-        adapter_service,
+        adapter_service=None,
+        downstream_dispatcher=None,
         resolver_service=None,
         checkpointer=None,
         database_url: str | None = None,
@@ -39,11 +40,14 @@ class GraphService:
         self._exit_stack = ExitStack()
         self._closed = False
         self.checkpointer = checkpointer or self._build_checkpointer(database_url)
+        dispatcher = downstream_dispatcher or adapter_service
+        if dispatcher is None:
+            raise ValueError("downstream dispatcher is required")
         self.workflow = GraphWorkflow(
             WorkflowNodes(
                 llm_service=llm_service,
                 registry_service=registry_service,
-                adapter_service=adapter_service,
+                downstream_dispatcher=dispatcher,
                 resolver_service=resolver_service or _NullResolverService(),
             )
         ).compile(checkpointer=self.checkpointer)

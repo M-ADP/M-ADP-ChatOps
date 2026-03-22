@@ -6,25 +6,38 @@ from pathlib import Path
 from fastapi import Header
 from sqlalchemy.orm import Session, sessionmaker
 
-from chatops.config import Settings, get_settings
+from chatops.common.config.settings import AppConfig, DatabaseConfig, GroqConfig, get_app_config, get_db_config, get_groq_config
 from chatops.db.session import build_session_factory
+from chatops.dependencies.client.application import get_application_client
+from chatops.dependencies.client.monitoring import get_monitoring_client
+from chatops.dependencies.client.project import get_project_client
 from chatops.graph.service import GraphService
 from chatops.schemas.auth import AuthContext
-from chatops.services.adapters import DownstreamAdapterService
 from chatops.services.auth import build_auth_context
+from chatops.services.downstream_dispatcher import DownstreamDispatcher
 from chatops.services.llm import GroqLLMService
 from chatops.services.registry import RegistryService
 from chatops.services.resolver import ParameterResolverService
 
 
 @lru_cache(maxsize=1)
-def get_app_settings() -> Settings:
-    return get_settings()
+def get_app_settings() -> AppConfig:
+    return get_app_config()
+
+
+@lru_cache(maxsize=1)
+def get_database_settings() -> DatabaseConfig:
+    return get_db_config()
+
+
+@lru_cache(maxsize=1)
+def get_groq_settings() -> GroqConfig:
+    return get_groq_config()
 
 
 @lru_cache(maxsize=1)
 def get_session_factory() -> sessionmaker[Session]:
-    return build_session_factory(get_app_settings().database_url)
+    return build_session_factory(get_database_settings().url)
 
 
 @lru_cache(maxsize=1)
@@ -35,29 +48,32 @@ def get_registry_service() -> RegistryService:
 
 @lru_cache(maxsize=1)
 def get_llm_service() -> GroqLLMService:
-    settings = get_app_settings()
+    app_settings = get_app_settings()
+    groq_settings = get_groq_settings()
     return GroqLLMService(
-        api_key=settings.groq_api_key,
-        model=settings.groq_model,
-        timeout_seconds=settings.downstream_timeout_seconds,
+        api_key=groq_settings.api_key,
+        model=groq_settings.model,
+        timeout_seconds=app_settings.downstream_timeout_seconds,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_downstream_dispatcher() -> DownstreamDispatcher:
+    return DownstreamDispatcher(
+        project_client=get_project_client(),
+        application_client=get_application_client(),
+        monitoring_client=get_monitoring_client(),
     )
 
 
 @lru_cache(maxsize=1)
 def get_graph_service() -> GraphService:
-    settings = get_app_settings()
     return GraphService(
         llm_service=get_llm_service(),
         registry_service=get_registry_service(),
-        adapter_service=DownstreamAdapterService(
-            resource_server_base_url=settings.resource_server_base_url,
-            application_server_base_url=settings.application_server_base_url,
-            user_server_base_url=settings.user_server_base_url,
-            timeout_seconds=settings.downstream_timeout_seconds,
-            use_fake=settings.use_fake_downstream_client,
-        ),
+        downstream_dispatcher=get_downstream_dispatcher(),
         resolver_service=ParameterResolverService(),
-        database_url=settings.database_url,
+        database_url=get_database_settings().url,
     )
 
 
