@@ -36,6 +36,22 @@ class Settings(BaseSettings):
     )
 
 
+class SonyflakeSettings(BaseSettings):
+    machine_id: int = 0
+
+    model_config = SettingsConfigDict(
+        env_prefix="SONYFLAKE_",
+        env_file=str(resolve_env_file()),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+@lru_cache(maxsize=1)
+def get_sonyflake_settings() -> SonyflakeSettings:
+    return SonyflakeSettings()
