@@ -139,33 +139,37 @@ fake_graph_service = GraphService(
 
 def test_inquiry_completes_without_approval() -> None:
     result = fake_graph_service.handle_request(
-        session_id="session-1",
+        session_id=1001,
         user_id="user-1",
         message_text="프로젝트 생성 방법 알려줘",
     )
 
+    assert isinstance(result.request_id, int)
+    assert result.request_id > 0
     assert result.status == "completed"
     assert result.requires_approval is False
 
 
 def test_query_returns_interpreted_response() -> None:
     result = fake_graph_service.handle_request(
-        session_id="session-1",
+        session_id=1001,
         user_id="user-1",
         message_text="현재 앱 트래픽 상태 알려줘",
     )
 
+    assert isinstance(result.request_id, int)
     assert result.status == "completed"
     assert result.final_response == "조회 응답: monitoring.get_app_deployment_traffic ok for user-1"
 
 
 def test_command_request_stops_at_pending_approval() -> None:
     result = fake_graph_service.handle_request(
-        session_id="session-1",
+        session_id=1001,
         user_id="user-1",
         message_text="프로젝트 생성해줘",
     )
 
+    assert isinstance(result.request_id, int)
     assert result.status == "pending_approval"
     assert result.requires_approval is True
     assert result.selected_operation_ids == ["project.create"]
@@ -173,8 +177,8 @@ def test_command_request_stops_at_pending_approval() -> None:
 
 def test_command_resume_executes_after_approval() -> None:
     result = fake_graph_service.resume_request(
-        request_id="request-1",
-        session_id="session-1",
+        request_id=2001,
+        session_id=1001,
         user_id="user-1",
         message_text="프로젝트 생성해줘",
     )
@@ -194,8 +198,8 @@ def test_command_resume_passes_resolved_inputs_to_adapter() -> None:
     )
 
     graph_service.resume_request(
-        request_id="request-1",
-        session_id="session-1",
+        request_id=2001,
+        session_id=1001,
         user_id="user-1",
         message_text="프로젝트 생성해줘",
     )
