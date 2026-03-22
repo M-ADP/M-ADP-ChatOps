@@ -20,7 +20,7 @@ from chatops.services.events import EventService
 router = APIRouter(prefix="/sessions/{session_id}/requests", tags=["requests"])
 
 
-def _load_request_or_404(db_session: Session, request_id: str, user_id: str) -> RequestRecord:
+def _load_request_or_404(db_session: Session, request_id: int, user_id: str) -> RequestRecord:
     record = RequestRepository(db_session).get_for_user(request_id=request_id, user_id=user_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
@@ -29,7 +29,7 @@ def _load_request_or_404(db_session: Session, request_id: str, user_id: str) -> 
 
 @router.post("", response_model=RequestResponse, status_code=status.HTTP_202_ACCEPTED)
 def create_request(
-    session_id: str,
+    session_id: int,
     payload: CreateRequestRequest,
     auth: AuthContext = Depends(get_auth_context),
     db_session: Session = Depends(get_db_session),
@@ -48,6 +48,7 @@ def create_request(
     )
     repo = RequestRepository(db_session)
     record = repo.create(
+        request_id=graph_result.request_id,
         session_id=session_id,
         user_id=auth.user_id,
         message_text=payload.message,
@@ -112,8 +113,8 @@ def create_request(
 
 @router.get("/{request_id}", response_model=RequestResponse)
 def get_request(
-    session_id: str,
-    request_id: str,
+    session_id: int,
+    request_id: int,
     auth: AuthContext = Depends(get_auth_context),
     db_session: Session = Depends(get_db_session),
 ) -> RequestResponse:
@@ -137,8 +138,8 @@ def get_request(
 
 @router.post("/{request_id}/approve", response_model=ApproveRequestResponse)
 def approve_request(
-    session_id: str,
-    request_id: str,
+    session_id: int,
+    request_id: int,
     auth: AuthContext = Depends(get_auth_context),
     db_session: Session = Depends(get_db_session),
     graph_service: GraphService = Depends(get_graph_service),
@@ -147,7 +148,6 @@ def approve_request(
     if session_record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    repo = RequestRepository(db_session)
     record = _load_request_or_404(db_session, request_id=request_id, user_id=auth.user_id)
     if record.status != "pending_approval":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Request is not pending approval")
@@ -183,8 +183,8 @@ def approve_request(
 
 @router.post("/{request_id}/reject", response_model=RejectRequestResponse)
 def reject_request(
-    session_id: str,
-    request_id: str,
+    session_id: int,
+    request_id: int,
     auth: AuthContext = Depends(get_auth_context),
     db_session: Session = Depends(get_db_session),
 ) -> RejectRequestResponse:
