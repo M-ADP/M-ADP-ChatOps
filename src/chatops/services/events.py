@@ -15,8 +15,8 @@ class EventService:
 
     def append_event(
         self,
-        request_id: str,
-        session_id: str,
+        request_id: int,
+        session_id: int,
         event_type: str,
         payload: dict[str, Any],
     ) -> RequestEventRecord:
@@ -29,5 +29,5 @@ class EventService:
             payload=json.dumps(payload, ensure_ascii=False),
         )
 
-    def list_after_sequence(self, request_id: str, sequence: int) -> list[RequestEventRecord]:
+    def list_after_sequence(self, request_id: int, sequence: int) -> list[RequestEventRecord]:
         return self.repository.list_after_sequence(request_id=request_id, sequence=sequence)
