@@ -57,6 +57,7 @@ def get_graph_service() -> GraphService:
             use_fake=settings.use_fake_downstream_client,
         ),
         resolver_service=ParameterResolverService(),
+        database_url=settings.database_url,
     )
 
 
