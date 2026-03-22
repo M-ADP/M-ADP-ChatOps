@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from chatops.services.registry import RegistryEntry
-
-
 class GraphState(TypedDict, total=False):
     request_id: int
     session_id: int
@@ -21,7 +18,7 @@ class GraphState(TypedDict, total=False):
     classification_confidence: float
     route: str
     selected_operation_ids: list[str]
-    selected_operation: RegistryEntry | None
+    selected_operation_id: str | None
     resolved_inputs: dict[str, Any] | None
     query_result: dict[str, Any] | None
     command_result: dict[str, Any] | None
