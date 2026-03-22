@@ -6,8 +6,8 @@ from chatops.services.registry import RegistryEntry
 
 
 class GraphState(TypedDict, total=False):
-    request_id: str
-    session_id: str
+    request_id: int
+    session_id: int
     user_id: str
     user_role: str | None
     org_id: str | None
