@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import uuid4
 
+from chatops.common.id_generator import IdGenerator
 from chatops.graph.nodes import WorkflowNodes
 from chatops.graph.state import GraphState
 from chatops.graph.workflow import GraphWorkflow
@@ -10,8 +10,8 @@ from chatops.graph.workflow import GraphWorkflow
 
 @dataclass(frozen=True)
 class GraphResult:
-    request_id: str
-    session_id: str
+    request_id: int
+    session_id: int
     user_id: str
     status: str
     request_type: str
@@ -34,14 +34,14 @@ class GraphService:
 
     def handle_request(
         self,
-        session_id: str,
+        session_id: int,
         user_id: str,
         message_text: str,
         user_role: str | None = None,
         org_id: str | None = None,
     ) -> GraphResult:
         initial_state: GraphState = {
-            "request_id": str(uuid4()),
+            "request_id": IdGenerator.generate_sonyflake_id(),
             "session_id": session_id,
             "user_id": user_id,
             "user_role": user_role,
@@ -56,8 +56,8 @@ class GraphService:
 
     def resume_request(
         self,
-        request_id: str,
-        session_id: str,
+        request_id: int,
+        session_id: int,
         user_id: str,
         message_text: str,
         user_role: str | None = None,
