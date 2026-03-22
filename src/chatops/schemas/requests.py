@@ -10,8 +10,8 @@ class CreateRequestRequest(BaseModel):
 
 
 class RequestResponse(BaseModel):
-    request_id: str
-    session_id: str
+    request_id: int
+    session_id: int
     status: str
     message: str
     request_type: str | None = None
@@ -22,10 +22,10 @@ class RequestResponse(BaseModel):
 
 
 class ApproveRequestResponse(BaseModel):
-    request_id: str
+    request_id: int
     status: str
 
 
 class RejectRequestResponse(BaseModel):
-    request_id: str
+    request_id: int
     status: str
