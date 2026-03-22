@@ -57,6 +57,7 @@ class StubGraphService:
         session_id: int,
         user_id: str,
         message_text: str,
+        approval_granted: bool = True,
         user_role: str | None = None,
         org_id: str | None = None,
     ) -> GraphResult:
@@ -64,11 +65,11 @@ class StubGraphService:
             request_id=request_id,
             session_id=session_id,
             user_id=user_id,
-            status="completed",
+            status="completed" if approval_granted else "rejected",
             request_type="command",
             requires_approval=False,
             intent="execute_command",
-            final_response="명령 실행 완료",
+            final_response="명령 실행 완료" if approval_granted else "명령 실행 거절",
             selected_operation_ids=["project.create"],
         )
 
