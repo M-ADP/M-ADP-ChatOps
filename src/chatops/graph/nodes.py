@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.types import interrupt
+
 from chatops.graph.state import GraphState
 
 
@@ -42,12 +44,13 @@ class WorkflowNodes:
         candidates = self.registry_service.find_candidates(state["message_text"], usable_in="query")
         selected = candidates[0] if candidates else None
         return {
-            "selected_operation": selected,
+            "selected_operation_id": selected.id if selected is not None else None,
             "selected_operation_ids": [candidate.id for candidate in candidates],
         }
 
     def execute_query(self, state: GraphState) -> GraphState:
-        operation = state.get("selected_operation")
+        operation_id = state.get("selected_operation_id")
+        operation = self.registry_service.get_entry(operation_id) if operation_id else None
         if operation is None:
             return {
                 "query_result": {"summary": "적절한 조회 API를 찾지 못했습니다."},
@@ -81,23 +84,32 @@ class WorkflowNodes:
         operation_ids = [candidate.id for candidate in candidates]
         selected = candidates[0] if candidates else None
         return {
-            "selected_operation": selected,
+            "selected_operation_id": selected.id if selected is not None else None,
             "selected_operation_ids": operation_ids,
             "final_response": self.llm_service.plan_command(state["message_text"], operation_ids),
-            "requires_approval": True,
-        }
-
-    def wait_for_approval(self, state: GraphState) -> GraphState:
-        return {
             "request_status": "pending_approval",
             "requires_approval": True,
         }
 
-    def resume_after_approval(self, state: GraphState) -> GraphState:
-        return state
+    def wait_for_approval(self, state: GraphState) -> GraphState:
+        approved = interrupt(
+            {
+                "request_id": state["request_id"],
+                "session_id": state["session_id"],
+                "plan": state.get("final_response"),
+                "selected_operation_ids": list(state.get("selected_operation_ids", [])),
+            }
+        )
+        return {
+            "approval_granted": bool(approved),
+            "request_status": "approved" if approved else "rejected",
+            "requires_approval": False,
+            "final_response": state.get("final_response") if approved else "명령 실행이 거절되었습니다.",
+        }
 
     def execute_command(self, state: GraphState) -> GraphState:
-        operation = state.get("selected_operation")
+        operation_id = state.get("selected_operation_id")
+        operation = self.registry_service.get_entry(operation_id) if operation_id else None
         if operation is None:
             return {
                 "command_result": {"success": False, "summary": "적절한 명령 API를 찾지 못했습니다."},
