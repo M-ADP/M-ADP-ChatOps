@@ -59,20 +59,32 @@ async def test_fake_clients_return_predictable_payloads() -> None:
     application_client = FakeApplicationClientImpl()
     monitoring_client = FakeMonitoringClientImpl()
 
-    assert await project_client.create_project(
+    create_result = await project_client.create_project(
         user_id="1",
         role="admin",
         body={"name": "demo"},
-    ) == {"summary": "project.create"}
+    )
+    assert create_result["summary"] == "project.create"
+    assert create_result["success"] is True
+    assert create_result["data"]["name"] == "demo"
     assert await project_client.list_projects(user_id="1", role="admin") == {
-        "summary": "프로젝트 목록이 없습니다.",
-        "items": [],
+        "summary": "demo",
+        "items": [
+            {
+                "id": create_result["data"]["id"],
+                "name": "demo",
+                "my_role": "OWNER",
+            }
+        ],
     }
-    assert await application_client.create_apps(
+    app_create_result = await application_client.create_apps(
         user_id="1",
         role="admin",
         body={"name": "demo", "project_id": 1},
-    ) == {"summary": "application.create_apps"}
+    )
+    assert app_create_result["summary"] == "application.create_apps"
+    assert app_create_result["data"]["name"] == "demo"
+    assert app_create_result["data"]["project_id"] == 1
     assert await monitoring_client.get_app_deployment_traffic(
         user_id="1",
         role="admin",

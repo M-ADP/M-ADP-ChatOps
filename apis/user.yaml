@@ -1,0 +1,249 @@
+openapi: 3.1.0
+info:
+  title: Default module
+  description: ''
+  version: 1.0.0
+tags:
+  - name: User
+paths:
+  /user/profile/{nickname}:
+    get:
+      summary: 닉네임으로 유저 프로필 조회하기
+      deprecated: false
+      description: ''
+      tags:
+        - User
+      parameters:
+        - name: nickname
+          in: path
+          description: ''
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nickname:
+                    type: string
+                    description: ''
+                  profile:
+                    type: string
+                    description: ''
+                  id:
+                    type: integer
+                    description: ID
+                  github_id:
+                    type: string
+                required:
+                  - id
+                  - github_id
+              example: |-
+                {
+                  "id": ,
+                  "nickname": "",
+                  "github_id": "",
+                  "profile": ""
+                }
+          headers: {}
+      security: []
+  /user/deactivate:
+    post:
+      summary: 어드민으로 유저계정 비활성화 하기
+      deprecated: false
+      description: ''
+      tags:
+        - User
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeactivateUserRequestDto'
+              description: ''
+            examples: {}
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+          headers: {}
+      security: []
+  /user/withdraw:
+    delete:
+      summary: 탈퇴하기
+      deprecated: false
+      description: ''
+      tags:
+        - User
+      parameters:
+        - name: userId
+          in: query
+          description: ''
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+          headers: {}
+      security: []
+  /user/profile:
+    get:
+      summary: 내 프로필 조회하기
+      deprecated: false
+      description: ''
+      tags:
+        - User
+      parameters:
+        - name: userId
+          in: query
+          description: ''
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nickname:
+                    type: string
+                    description: ''
+                  profile:
+                    type: string
+                    description: ''
+                  id:
+                    type: integer
+                  github_id:
+                    type: string
+                required:
+                  - id
+                  - github_id
+              example:
+                id: 1
+                nickname: ''
+                profile: ''
+                github_id: ''
+          headers: {}
+      security: []
+    patch:
+      summary: 유저 프로필 수정하기
+      deprecated: false
+      description: ''
+      tags:
+        - User
+      parameters:
+        - name: userId
+          in: query
+          description: ''
+          required: false
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserProfileRequestDto'
+              description: ''
+            examples: {}
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+          headers: {}
+      security: []
+  /user/profile/id/{user_id}:
+    get:
+      summary: 유저 아이디로 프로필 조회하기
+      deprecated: false
+      description: ''
+      tags:
+        - User
+      parameters:
+        - name: user_id
+          in: path
+          description: ''
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+            examples: {}
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type:
+                  - object
+                  - 'null'
+                properties:
+                  user_id:
+                    type: integer
+                  nickname:
+                    type: string
+                  profile:
+                    type: string
+                required:
+                  - nickname
+                  - profile
+                  - user_id
+          headers: {}
+      security: []
+webhooks: {}
+components:
+  schemas:
+    ResponseEntityUserProfileResponseDto: &ref_0
+      type: object
+      properties:
+        nickname:
+          type: string
+          description: ''
+        profile:
+          type: string
+          description: ''
+      x-apifox-orders:
+        - nickname
+        - profile
+    UpdateUserProfileRequestDto: *ref_0
+    DeactivateUserRequestDto:
+      type: object
+      properties:
+        userId:
+          type: integer
+          description: ''
+          format: int64
+      x-apifox-orders:
+        - userId
+      required:
+        - userId
+  responses: {}
+  securitySchemes: {}
+servers: []
+security: []

@@ -20,7 +20,9 @@ class StubGraphService:
         message_text: str,
         user_role: str | None = None,
         org_id: str | None = None,
+        session_context: dict[str, object] | None = None,
     ) -> GraphResult:
+        del session_context
         return GraphResult(
             request_id=2001,
             session_id=session_id,
@@ -31,6 +33,7 @@ class StubGraphService:
             intent="execute_command",
             final_response="실행 계획입니다.",
             selected_operation_ids=["project.create"],
+            missing_inputs=None,
         )
 
 

@@ -9,6 +9,8 @@ class GraphState(TypedDict, total=False):
     user_role: str | None
     org_id: str | None
     message_text: str
+    effective_message_text: str
+    session_context: dict[str, Any] | None
     approval_granted: bool
     request_type: str
     request_status: str
@@ -19,6 +21,7 @@ class GraphState(TypedDict, total=False):
     route: str
     selected_operation_ids: list[str]
     selected_operation_id: str | None
+    missing_inputs: list[str]
     resolved_inputs: dict[str, Any] | None
     query_result: dict[str, Any] | None
     command_result: dict[str, Any] | None

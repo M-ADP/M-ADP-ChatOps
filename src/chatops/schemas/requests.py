@@ -14,8 +14,10 @@ class RequestResponse(BaseModel):
     session_id: int
     status: str
     message: str
+    assistant_message: str | None = None
     request_type: str | None = None
     requires_approval: bool = False
+    missing_inputs: list[str] | None = None
     final_response: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -24,8 +26,10 @@ class RequestResponse(BaseModel):
 class ApproveRequestResponse(BaseModel):
     request_id: int
     status: str
+    assistant_message: str | None = None
 
 
 class RejectRequestResponse(BaseModel):
     request_id: int
     status: str
+    assistant_message: str | None = None

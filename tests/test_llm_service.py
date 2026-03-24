@@ -140,3 +140,42 @@ def test_groq_llm_service_applies_inquiry_guardrail_for_how_to_questions() -> No
 
     assert result["request_type"] == "inquiry"
     assert result["intent"] == "answer_inquiry"
+
+
+def test_groq_llm_service_falls_back_on_rate_limit_for_classification() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"error": {"message": "rate limit"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    service = GroqLLMService(
+        api_key="test-key",
+        model="llama-3.3-70b-versatile",
+        timeout_seconds=10,
+        client=client,
+    )
+
+    result = service.classify("demo 프로젝트 멤버 목록 보여줘")
+
+    assert result["request_type"] == "query"
+    assert result["intent"] == "query_status"
+    assert "fallback" in result["classification_reason"].lower()
+
+
+def test_groq_llm_service_falls_back_on_rate_limit_for_query_interpretation() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"error": {"message": "rate limit"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    service = GroqLLMService(
+        api_key="test-key",
+        model="llama-3.3-70b-versatile",
+        timeout_seconds=10,
+        client=client,
+    )
+
+    result = service.interpret_query_result(
+        "demo 프로젝트 멤버 목록 보여줘",
+        {"summary": "demo 프로젝트 멤버 목록:\n- alice(OWNER)"},
+    )
+
+    assert result == "demo 프로젝트 멤버 목록:\n- alice(OWNER)"

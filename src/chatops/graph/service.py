@@ -24,6 +24,8 @@ class GraphResult:
     intent: str
     final_response: str | None
     selected_operation_ids: list[str]
+    missing_inputs: list[str] | None = None
+    effective_message_text: str | None = None
 
 
 class GraphService:
@@ -60,6 +62,7 @@ class GraphService:
         message_text: str,
         user_role: str | None = None,
         org_id: str | None = None,
+        session_context: dict[str, object] | None = None,
     ) -> GraphResult:
         request_id = IdGenerator.generate_sonyflake_id()
         initial_state: GraphState = {
@@ -69,6 +72,7 @@ class GraphService:
             "user_role": user_role,
             "org_id": org_id,
             "message_text": message_text,
+            "session_context": session_context,
             "approval_granted": False,
             "request_status": "created",
             "selected_operation_ids": [],
@@ -123,6 +127,8 @@ class GraphService:
             intent=str(state.get("intent", "")),
             final_response=state.get("final_response"),
             selected_operation_ids=list(state.get("selected_operation_ids", [])),
+            missing_inputs=list(state.get("missing_inputs", [])) or None,
+            effective_message_text=state.get("effective_message_text"),
         )
 
     def _thread_config(self, request_id: int) -> dict[str, object]:
@@ -144,5 +150,6 @@ class GraphService:
 
 
 class _NullResolverService:
-    def resolve(self, operation, message_text: str) -> dict[str, object]:
+    def resolve(self, operation, message_text: str, session_context: dict[str, object] | None = None) -> dict[str, object]:
+        del session_context
         return {}

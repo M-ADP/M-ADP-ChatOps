@@ -4,12 +4,13 @@ from dataclasses import dataclass
 
 from chatops.graph.service import GraphService
 from chatops.services.registry import RegistryEntry
+from chatops.services.resolver import ParameterResolverService
 
 
 @dataclass
 class FakeLLMService:
     def classify(self, message_text: str) -> dict[str, object]:
-        if "상태" in message_text or "트래픽" in message_text:
+        if "상태" in message_text or "트래픽" in message_text or "목록" in message_text or "보여" in message_text:
             return {
                 "request_type": "query",
                 "intent": "query_status",
@@ -89,7 +90,17 @@ class FakeRegistryService:
                 risk_level="medium",
                 side_effects=("프로젝트 생성",),
                 required_headers=("X-User-Id",),
-                required_inputs={},
+                required_inputs={
+                    "headers": [],
+                    "path": [],
+                    "query": [],
+                    "body": {"required": True, "required_fields": ["name"]},
+                },
+                important_inputs={
+                    "path": [],
+                    "query": [],
+                    "body": ["name", "max_cpu", "max_memory", "max_disk"],
+                },
                 preconditions=(),
                 missing_info_questions=(),
                 response_interpretation="생성 결과",
@@ -141,8 +152,41 @@ class FakeDownstreamDispatcher:
 
 
 @dataclass
+class FailingDownstreamDispatcher(FakeDownstreamDispatcher):
+    async def execute_command(
+        self,
+        operation: RegistryEntry,
+        user_id: str,
+        user_role: str | None = None,
+        org_id: str | None = None,
+        resolved_inputs: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        self.last_resolved_inputs = resolved_inputs
+        return {
+            "success": False,
+            "summary": "요청값이 올바르지 않습니다.",
+            "status_code": 422,
+        }
+
+
+@dataclass
 class FakeResolverService:
-    def resolve(self, operation: RegistryEntry, message_text: str) -> dict[str, object]:
+    def resolve(
+        self,
+        operation: RegistryEntry,
+        message_text: str,
+        session_context: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del session_context
+        if operation.id == "project.create":
+            return {
+                "body": {
+                    "name": "demo",
+                    "max_cpu": 1,
+                    "max_memory": 0.5,
+                    "max_disk": 10,
+                }
+            }
         return {"body": {"name": "demo"}}
 
 
@@ -150,6 +194,7 @@ fake_graph_service = GraphService(
     llm_service=FakeLLMService(),
     registry_service=FakeRegistryService(),
     adapter_service=FakeDownstreamDispatcher(),
+    resolver_service=ParameterResolverService(),
 )
 
 
@@ -182,7 +227,7 @@ def test_command_request_stops_at_pending_approval() -> None:
     result = fake_graph_service.handle_request(
         session_id=1001,
         user_id="user-1",
-        message_text="프로젝트 생성해줘",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
     )
 
     assert isinstance(result.request_id, int)
@@ -195,19 +240,19 @@ def test_command_resume_executes_after_approval() -> None:
     pending = fake_graph_service.handle_request(
         session_id=1001,
         user_id="user-1",
-        message_text="프로젝트 생성해줘",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
     )
     result = fake_graph_service.resume_request(
         request_id=pending.request_id,
         session_id=1001,
         user_id="user-1",
-        message_text="프로젝트 생성해줘",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
         approval_granted=True,
     )
 
     assert result.status == "completed"
     assert result.requires_approval is False
-    assert result.final_response == "명령 실행 응답: project.create executed for user-1"
+    assert result.final_response == "프로젝트를 생성했습니다."
 
 
 def test_command_resume_passes_resolved_inputs_to_adapter() -> None:
@@ -223,18 +268,20 @@ def test_command_resume_passes_resolved_inputs_to_adapter() -> None:
     pending = graph_service.handle_request(
         session_id=1001,
         user_id="user-1",
-        message_text="프로젝트 생성해줘",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
     )
     graph_service.resume_request(
         request_id=pending.request_id,
         session_id=1001,
         user_id="user-1",
-        message_text="프로젝트 생성해줘",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
         approval_granted=True,
     )
 
-    assert adapter_service.last_resolved_inputs == {"body": {"name": "demo"}}
-    assert registry_service.calls == [("command", "프로젝트 생성해줘")]
+    assert adapter_service.last_resolved_inputs == {
+        "body": {"name": "demo", "max_cpu": 1, "max_memory": 0.5, "max_disk": 10}
+    }
+    assert registry_service.calls == [("command", "프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10")]
 
 
 def test_command_resume_rejects_without_replanning() -> None:
@@ -250,16 +297,755 @@ def test_command_resume_rejects_without_replanning() -> None:
     pending = graph_service.handle_request(
         session_id=1001,
         user_id="user-1",
-        message_text="프로젝트 생성해줘",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
     )
     result = graph_service.resume_request(
         request_id=pending.request_id,
         session_id=1001,
         user_id="user-1",
-        message_text="프로젝트 생성해줘",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
         approval_granted=False,
     )
 
     assert result.status == "rejected"
     assert adapter_service.last_resolved_inputs is None
-    assert registry_service.calls == [("command", "프로젝트 생성해줘")]
+    assert registry_service.calls == [("command", "프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10")]
+
+
+def test_input_required_follow_up_message_continues_previous_command() -> None:
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=FakeRegistryService(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="이름은 demo야 cpu는 1이야 메모리는 0.5야 디스크는 10이야",
+        session_context={
+            "last_message_text": "프로젝트 하나 만들어줘",
+            "last_request_status": "input_required",
+            "last_request_type": "command",
+        },
+    )
+
+    assert result.status == "pending_approval"
+    assert result.requires_approval is True
+    assert result.final_response is not None
+    assert "실행할까요" in result.final_response
+    assert "project.create" not in result.final_response
+    assert "프로젝트 이름 demo" in result.final_response
+
+
+def test_input_required_message_is_conversational_question() -> None:
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=FakeRegistryService(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 하나 만들어줘",
+    )
+
+    assert result.status == "input_required"
+    assert result.final_response == "프로젝트를 만들려면 아래 정보가 더 필요합니다. 프로젝트 이름, 최대 CPU, 최대 메모리, 최대 디스크를 알려주세요."
+
+
+def test_new_request_after_input_required_does_not_force_previous_command() -> None:
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=FakeRegistryService(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 목록 보여줘",
+        session_context={
+            "last_message_text": "프로젝트 하나 만들어줘",
+            "last_request_status": "input_required",
+            "last_request_type": "command",
+        },
+    )
+
+    assert result.status == "completed"
+    assert result.request_type == "query"
+
+
+def test_command_without_required_inputs_returns_input_required() -> None:
+    registry_service = FakeRegistryService()
+    registry_service._command_entries = lambda: [
+        RegistryEntry(
+            id="project.create",
+            source_file="ai_registry/project.create.ai.yaml",
+            operation_id="create_project",
+            path="/projects",
+            method="POST",
+            summary="프로젝트 생성",
+            capability="프로젝트 생성",
+            usable_in=("command",),
+            operation_kind="write",
+            when_to_use=("프로젝트 생성",),
+            when_not_to_use=(),
+            requires_confirmation=True,
+            risk_level="medium",
+            side_effects=("프로젝트 생성",),
+            required_headers=("X-User-Id",),
+            required_inputs={
+                "headers": [],
+                "path": [],
+                "query": [],
+                "body": {"required": True, "required_fields": ["name"]},
+            },
+            important_inputs={
+                "path": [],
+                "query": [],
+                "body": ["name", "max_cpu", "max_memory", "max_disk"],
+            },
+            preconditions=(),
+            missing_info_questions=("요청 본문의 name 값을 확인해야 합니다.",),
+            response_interpretation="생성 결과",
+            plan_template=("입력 확인",),
+            examples=(),
+        )
+    ]
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=registry_service,
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 하나 만들어줘",
+    )
+
+    assert result.status == "input_required"
+    assert result.requires_approval is False
+    assert result.missing_inputs == ["name", "max_cpu", "max_memory", "max_disk"]
+    assert "최대 CPU" in str(result.final_response)
+    assert "최대 메모리" in str(result.final_response)
+    assert "최대 디스크" in str(result.final_response)
+
+
+def test_command_follow_up_with_partial_values_stays_input_required() -> None:
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=FakeRegistryService(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="이름은 demo야 cpu는 1이야",
+        session_context={
+            "last_message_text": "프로젝트 하나 만들어줘",
+            "last_request_status": "input_required",
+            "last_request_type": "command",
+        },
+    )
+
+    assert result.status == "input_required"
+    assert result.requires_approval is False
+    assert result.missing_inputs == ["max_memory", "max_disk"]
+
+
+def test_command_follow_up_with_all_values_builds_user_facing_plan() -> None:
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=FakeRegistryService(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="이름은 demo야 cpu는 1이야 메모리는 0.5야 디스크는 10이야",
+        session_context={
+            "last_message_text": "프로젝트 하나 만들어줘",
+            "last_request_status": "input_required",
+            "last_request_type": "command",
+        },
+    )
+
+    assert result.status == "pending_approval"
+    assert result.final_response is not None
+    assert "프로젝트 이름 demo" in result.final_response
+    assert "최대 CPU 1" in result.final_response
+    assert "최대 메모리 0.5GB" in result.final_response
+    assert "최대 디스크 10GB" in result.final_response
+
+
+def test_command_follow_up_uses_last_effective_message_for_multi_turn_collection() -> None:
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=FakeRegistryService(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="메모리는 0.5야 디스크는 10이야",
+        session_context={
+            "last_message_text": "이름은 demo야 cpu는 1이야",
+            "last_effective_message_text": "프로젝트 하나 만들어줘\n이름은 demo야 cpu는 1이야",
+            "last_request_status": "input_required",
+            "last_request_type": "command",
+        },
+    )
+
+    assert result.status == "pending_approval"
+    assert result.final_response is not None
+    assert "프로젝트 이름 demo" in result.final_response
+    assert "최대 CPU 1" in result.final_response
+    assert "최대 메모리 0.5GB" in result.final_response
+    assert "최대 디스크 10GB" in result.final_response
+
+
+def test_application_create_without_required_business_values_returns_input_required() -> None:
+    class ApplicationCreateRegistry(FakeRegistryService):
+        def _command_entries(self) -> list[RegistryEntry]:
+            return [
+                RegistryEntry(
+                    id="application.create_apps",
+                    source_file="ai_registry/application.create_apps.ai.yaml",
+                    operation_id="create_apps",
+                    path="/apps",
+                    method="POST",
+                    summary="애플리케이션 생성",
+                    capability="애플리케이션 생성",
+                    usable_in=("command",),
+                    operation_kind="write",
+                    when_to_use=("애플리케이션 생성",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="medium",
+                    side_effects=("애플리케이션 생성",),
+                    required_headers=(),
+                    required_inputs={
+                        "headers": [],
+                        "path": [],
+                        "query": [],
+                        "body": {
+                            "required": True,
+                            "required_fields": ["name", "cpu", "memory", "disk", "project_id", "port"],
+                        },
+                    },
+                    important_inputs={
+                        "path": [],
+                        "query": [],
+                        "body": ["name", "cpu", "memory", "disk", "project_id", "port"],
+                    },
+                )
+            ]
+
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=ApplicationCreateRegistry(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="demo 프로젝트에 앱 만들어줘",
+    )
+
+    assert result.status == "input_required"
+    assert result.missing_inputs == ["name", "cpu", "memory", "disk", "port"]
+    assert result.final_response is not None
+    assert "프로젝트 이름" not in result.final_response
+
+
+def test_project_update_resource_without_required_business_values_returns_input_required() -> None:
+    class ProjectResourceRegistry(FakeRegistryService):
+        def _command_entries(self) -> list[RegistryEntry]:
+            return [
+                RegistryEntry(
+                    id="project.update_resource",
+                    source_file="ai_registry/project.update_resource.ai.yaml",
+                    operation_id="update_project_resource",
+                    path="/projects/{project_id}/resource",
+                    method="PATCH",
+                    summary="프로젝트 리소스 수정",
+                    capability="프로젝트 리소스 수정",
+                    usable_in=("command",),
+                    operation_kind="write",
+                    when_to_use=("프로젝트 리소스 수정",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="medium",
+                    side_effects=("프로젝트 리소스 수정",),
+                    required_headers=("X-User-Id",),
+                    required_inputs={
+                        "headers": [],
+                        "path": [{"name": "project_id", "required": True}],
+                        "query": [],
+                        "body": {"required": True, "required_fields": []},
+                    },
+                    important_inputs={
+                        "path": ["project_id"],
+                        "query": [],
+                        "body": ["max_cpu", "max_memory", "max_disk"],
+                    },
+                )
+            ]
+
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=ProjectResourceRegistry(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="demo 프로젝트 리소스 늘려줘",
+    )
+
+    assert result.status == "input_required"
+    assert result.missing_inputs == ["max_cpu", "max_memory", "max_disk"]
+    assert result.final_response is not None
+    assert "최대 CPU" in result.final_response
+
+
+def test_project_update_resource_with_required_business_values_returns_pending_approval() -> None:
+    class ProjectResourceRegistry(FakeRegistryService):
+        def _command_entries(self) -> list[RegistryEntry]:
+            return [
+                RegistryEntry(
+                    id="project.update_resource",
+                    source_file="ai_registry/project.update_resource.ai.yaml",
+                    operation_id="update_project_resource",
+                    path="/projects/{project_id}/resource",
+                    method="PATCH",
+                    summary="프로젝트 리소스 수정",
+                    capability="프로젝트 리소스 수정",
+                    usable_in=("command",),
+                    operation_kind="write",
+                    when_to_use=("프로젝트 리소스 수정",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="medium",
+                    side_effects=("프로젝트 리소스 수정",),
+                    required_headers=("X-User-Id",),
+                    required_inputs={
+                        "headers": [],
+                        "path": [{"name": "project_id", "required": True}],
+                        "query": [],
+                        "body": {"required": True, "required_fields": []},
+                    },
+                    important_inputs={
+                        "path": ["project_id"],
+                        "query": [],
+                        "body": ["max_cpu", "max_memory", "max_disk"],
+                    },
+                )
+            ]
+
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=ProjectResourceRegistry(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="demo 프로젝트 리소스 늘려줘 cpu는 2야 메모리는 1이야 디스크는 20이야",
+    )
+
+    assert result.status == "pending_approval"
+    assert result.requires_approval is True
+    assert result.final_response is not None
+    assert "대상 프로젝트 demo" in result.final_response
+    assert "최대 CPU 2" in result.final_response
+    assert "최대 메모리 1GB" in result.final_response
+    assert "최대 디스크 20GB" in result.final_response
+
+
+def test_command_downstream_failure_returns_failed_status() -> None:
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=FakeRegistryService(),
+        adapter_service=FailingDownstreamDispatcher(),
+        resolver_service=FakeResolverService(),
+    )
+
+    pending = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
+    )
+    result = graph_service.resume_request(
+        request_id=pending.request_id,
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
+        approval_granted=True,
+    )
+
+    assert result.status == "failed"
+    assert result.final_response == "프로젝트 생성에 실패했습니다. 요청값이 올바르지 않습니다."
+
+
+def test_project_update_without_target_name_requests_project_name_instead_of_id() -> None:
+    class UpdateOnlyRegistry(FakeRegistryService):
+        def _command_entries(self) -> list[RegistryEntry]:
+            return [
+                RegistryEntry(
+                    id="project.update_name",
+                    source_file="ai_registry/project.update_name.ai.yaml",
+                    operation_id="update_project_name",
+                    path="/projects/{project_id}/name",
+                    method="PATCH",
+                    summary="프로젝트 이름 수정",
+                    capability="프로젝트 이름 수정",
+                    usable_in=("command",),
+                    operation_kind="write",
+                    when_to_use=("프로젝트 이름 수정",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="medium",
+                    side_effects=("프로젝트 이름 수정",),
+                    required_headers=("X-User-Id",),
+                    required_inputs={
+                        "headers": [],
+                        "path": [{"name": "project_id", "required": True}],
+                        "query": [],
+                        "body": {"required": True, "required_fields": ["name"]},
+                    },
+                    preconditions=(),
+                    missing_info_questions=(),
+                    response_interpretation="수정 결과",
+                    plan_template=("입력 확인",),
+                    examples=(),
+                )
+            ]
+
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=UpdateOnlyRegistry(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 이름 바꿔줘",
+    )
+
+    assert result.status == "input_required"
+    assert result.missing_inputs == ["project_name", "name"]
+    assert "대상 프로젝트" in str(result.final_response)
+
+
+def test_command_plan_hides_internal_operation_id() -> None:
+    class MultiCandidateRegistry(FakeRegistryService):
+        def _command_entries(self) -> list[RegistryEntry]:
+            return [
+                RegistryEntry(
+                    id="project.update_name",
+                    source_file="ai_registry/project.update_name.ai.yaml",
+                    operation_id="update_project_name",
+                    path="/projects/{project_id}/name",
+                    method="PATCH",
+                    summary="프로젝트 이름 수정",
+                    capability="프로젝트 이름 수정",
+                    usable_in=("command",),
+                    operation_kind="write",
+                    when_to_use=("프로젝트 이름 수정",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="medium",
+                    side_effects=("프로젝트 이름 수정",),
+                    required_headers=("X-User-Id",),
+                    required_inputs={
+                        "headers": [],
+                        "path": [{"name": "project_id", "required": True}],
+                        "query": [],
+                        "body": {"required": True, "required_fields": ["name"]},
+                    },
+                    preconditions=(),
+                    missing_info_questions=(),
+                    response_interpretation="수정 결과",
+                    plan_template=("입력 확인",),
+                    examples=(),
+                ),
+                RegistryEntry(
+                    id="project.update_resource",
+                    source_file="ai_registry/project.update_resource.ai.yaml",
+                    operation_id="update_project_resource",
+                    path="/projects/{project_id}/resource",
+                    method="PATCH",
+                    summary="프로젝트 리소스 수정",
+                    capability="프로젝트 리소스 수정",
+                    usable_in=("command",),
+                    operation_kind="write",
+                    when_to_use=("프로젝트 리소스 수정",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="medium",
+                    side_effects=("프로젝트 리소스 수정",),
+                    required_headers=("X-User-Id",),
+                    required_inputs={
+                        "headers": [],
+                        "path": [{"name": "project_id", "required": True}],
+                        "query": [],
+                        "body": {"required": True, "required_fields": ["cpu"]},
+                    },
+                    preconditions=(),
+                    missing_info_questions=(),
+                    response_interpretation="수정 결과",
+                    plan_template=("입력 확인",),
+                    examples=(),
+                ),
+            ]
+
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=MultiCandidateRegistry(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="demo 프로젝트 이름은 chatops-renamed로 바꿔줘",
+    )
+
+    assert result.status == "pending_approval"
+    assert result.final_response is not None
+    assert "실행할까요" in result.final_response
+    assert "project.update_name" not in result.final_response
+    assert "project.update_resource" not in result.final_response
+
+
+def test_application_delete_without_target_values_returns_input_required() -> None:
+    class ApplicationDeleteRegistry(FakeRegistryService):
+        def _command_entries(self) -> list[RegistryEntry]:
+            return [
+                RegistryEntry(
+                    id="application.delete_apps",
+                    source_file="ai_registry/application.delete_apps.ai.yaml",
+                    operation_id="delete_apps",
+                    path="/apps",
+                    method="DELETE",
+                    summary="애플리케이션 삭제",
+                    capability="애플리케이션 삭제",
+                    usable_in=("command",),
+                    operation_kind="delete",
+                    when_to_use=("애플리케이션 삭제",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="high",
+                    side_effects=("애플리케이션 삭제",),
+                    required_headers=(),
+                    required_inputs={"headers": [], "path": [], "query": [], "body": None},
+                    important_inputs={"path": [], "query": [], "body": ["project_id", "application_id"]},
+                )
+            ]
+
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=ApplicationDeleteRegistry(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="앱 삭제해줘",
+    )
+
+    assert result.status == "input_required"
+    assert result.missing_inputs == ["project_name", "application_name"]
+    assert "대상 프로젝트" in str(result.final_response)
+    assert "앱 이름" in str(result.final_response)
+
+
+def test_application_resource_update_plan_uses_user_friendly_labels() -> None:
+    class ApplicationResourceRegistry(FakeRegistryService):
+        def _command_entries(self) -> list[RegistryEntry]:
+            return [
+                RegistryEntry(
+                    id="application.patch_apps_resources",
+                    source_file="ai_registry/application.patch_apps_resources.ai.yaml",
+                    operation_id="patch_apps_resources",
+                    path="/apps/resources",
+                    method="PATCH",
+                    summary="애플리케이션 자원 변경",
+                    capability="애플리케이션 자원 변경",
+                    usable_in=("command",),
+                    operation_kind="write",
+                    when_to_use=("애플리케이션 자원 변경",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="medium",
+                    side_effects=("애플리케이션 자원 변경",),
+                    required_headers=(),
+                    required_inputs={"headers": [], "path": [], "query": [], "body": {"required": True, "required_fields": []}},
+                    important_inputs={"path": [], "query": [], "body": ["project_id", "application_id", "max_cpu", "max_memory", "max_disk"]},
+                )
+            ]
+
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=ApplicationResourceRegistry(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="demo 프로젝트 api-demo 앱 리소스 변경해줘 cpu는 2야 메모리는 1024야 디스크는 12야",
+    )
+
+    assert result.status == "pending_approval"
+    assert result.final_response is not None
+    assert "애플리케이션 자원" in result.final_response
+    assert "대상 프로젝트 demo" in result.final_response
+    assert "앱 이름 api-demo" in result.final_response
+    assert "최대 CPU 2" in result.final_response
+    assert "최대 메모리 1024MB" in result.final_response
+    assert "최대 디스크 12GB" in result.final_response
+
+
+def test_application_github_update_without_github_values_returns_input_required() -> None:
+    class ApplicationGithubRegistry(FakeRegistryService):
+        def _command_entries(self) -> list[RegistryEntry]:
+            return [
+                RegistryEntry(
+                    id="application.patch_apps_github",
+                    source_file="ai_registry/application.patch_apps_github.ai.yaml",
+                    operation_id="patch_apps_github",
+                    path="/apps/github",
+                    method="PATCH",
+                    summary="애플리케이션 GitHub 연결",
+                    capability="애플리케이션 GitHub 연결",
+                    usable_in=("command",),
+                    operation_kind="write",
+                    when_to_use=("애플리케이션 GitHub 연결",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="medium",
+                    side_effects=("애플리케이션 GitHub 연결",),
+                    required_headers=(),
+                    required_inputs={
+                        "headers": [],
+                        "path": [],
+                        "query": [],
+                        "body": {"required": True, "required_fields": ["appDeploymentId", "owner", "repository"]},
+                    },
+                    important_inputs={
+                        "path": [],
+                        "query": [],
+                        "body": ["project_id", "appDeploymentId", "owner", "repository", "branch"],
+                    },
+                )
+            ]
+
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=ApplicationGithubRegistry(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="demo 프로젝트 api-demo 앱 깃허브 연결해줘",
+    )
+
+    assert result.status == "input_required"
+    assert result.missing_inputs == ["owner", "repository", "branch"]
+    assert "GitHub 소유자" in str(result.final_response)
+    assert "저장소 이름" in str(result.final_response)
+    assert "브랜치" in str(result.final_response)
+
+
+def test_application_github_follow_up_uses_previous_effective_message() -> None:
+    class ApplicationGithubRegistry(FakeRegistryService):
+        def _command_entries(self) -> list[RegistryEntry]:
+            return [
+                RegistryEntry(
+                    id="application.patch_apps_github",
+                    source_file="ai_registry/application.patch_apps_github.ai.yaml",
+                    operation_id="patch_apps_github",
+                    path="/apps/github",
+                    method="PATCH",
+                    summary="애플리케이션 GitHub 연결",
+                    capability="애플리케이션 GitHub 연결",
+                    usable_in=("command",),
+                    operation_kind="write",
+                    when_to_use=("애플리케이션 GitHub 연결",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="medium",
+                    side_effects=("애플리케이션 GitHub 연결",),
+                    required_headers=(),
+                    required_inputs={
+                        "headers": [],
+                        "path": [],
+                        "query": [],
+                        "body": {"required": True, "required_fields": ["appDeploymentId", "owner", "repository"]},
+                    },
+                    important_inputs={
+                        "path": [],
+                        "query": [],
+                        "body": ["project_id", "appDeploymentId", "owner", "repository", "branch"],
+                    },
+                )
+            ]
+
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=ApplicationGithubRegistry(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    first = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="demo 프로젝트 api-demo 앱 깃허브 연결해줘",
+    )
+    second = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="owner는 M-ADP야 repository는 chatops야 branch는 main이야",
+        session_context={
+            "last_request_status": first.status,
+            "last_message_text": "demo 프로젝트 api-demo 앱 깃허브 연결해줘",
+            "last_effective_message_text": first.effective_message_text,
+        },
+    )
+
+    assert second.status == "pending_approval"
+    assert second.final_response is not None
+    assert "대상 프로젝트 demo" in second.final_response
+    assert "앱 이름 api-demo" in second.final_response
+    assert "GitHub 소유자 M-ADP" in second.final_response

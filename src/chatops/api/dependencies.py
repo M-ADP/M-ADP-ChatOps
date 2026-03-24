@@ -11,6 +11,7 @@ from chatops.db.session import build_session_factory
 from chatops.dependencies.client.application import get_application_client
 from chatops.dependencies.client.monitoring import get_monitoring_client
 from chatops.dependencies.client.project import get_project_client
+from chatops.dependencies.client.user import get_user_client
 from chatops.graph.service import GraphService
 from chatops.schemas.auth import AuthContext
 from chatops.services.auth import build_auth_context
@@ -63,6 +64,7 @@ def get_downstream_dispatcher() -> DownstreamDispatcher:
         project_client=get_project_client(),
         application_client=get_application_client(),
         monitoring_client=get_monitoring_client(),
+        user_client=get_user_client(),
     )
 
 

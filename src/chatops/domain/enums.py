@@ -16,6 +16,7 @@ class RequestStatus(str, Enum):
     CREATED = "created"
     CLASSIFYING = "classifying"
     PROCESSING = "processing"
+    INPUT_REQUIRED = "input_required"
     PENDING_APPROVAL = "pending_approval"
     APPROVED = "approved"
     REJECTED = "rejected"

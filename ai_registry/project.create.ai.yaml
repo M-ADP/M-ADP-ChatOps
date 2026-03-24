@@ -38,12 +38,23 @@ required_inputs:
     type: object
     required_fields:
     - name
+important_inputs:
+  path: []
+  query: []
+  body:
+  - name
+  - max_cpu
+  - max_memory
+  - max_disk
 preconditions:
 - 필수 입력값이 모두 준비되어 있어야 합니다.
 missing_info_questions:
 - X-User-Id 값을 확인해야 합니다.
 - X-User-Role 값을 확인해야 합니다.
 - 요청 본문의 name 값을 확인해야 합니다.
+- 요청 본문의 max_cpu 값을 확인해야 합니다.
+- 요청 본문의 max_memory 값을 확인해야 합니다.
+- 요청 본문의 max_disk 값을 확인해야 합니다.
 response_interpretation: 응답의 성공 여부와 생성 또는 변경된 핵심 결과를 사용자에게 요약합니다.
 plan_template:
 - Create Project Endpoint 실행에 필요한 입력값을 확인합니다.

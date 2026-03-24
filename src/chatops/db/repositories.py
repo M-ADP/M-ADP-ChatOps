@@ -37,6 +37,7 @@ class RequestRepository:
         session_id: int,
         user_id: str,
         message_text: str,
+        effective_message_text: str | None = None,
         request_id: int | None = None,
         request_type: str | None = None,
         requires_approval: bool = False,
@@ -45,6 +46,7 @@ class RequestRepository:
             session_id=session_id,
             user_id=user_id,
             message_text=message_text,
+            effective_message_text=effective_message_text,
             request_type=request_type,
             status=RequestStatus.CREATED.value,
             requires_approval=requires_approval,
@@ -61,6 +63,18 @@ class RequestRepository:
         query = select(RequestRecord).where(
             RequestRecord.id == request_id,
             RequestRecord.user_id == user_id,
+        )
+        return self.session.execute(query).scalar_one_or_none()
+
+    def get_latest_for_session(self, session_id: int, user_id: str) -> RequestRecord | None:
+        query = (
+            select(RequestRecord)
+            .where(
+                RequestRecord.session_id == session_id,
+                RequestRecord.user_id == user_id,
+            )
+            .order_by(RequestRecord.created_at.desc(), RequestRecord.id.desc())
+            .limit(1)
         )
         return self.session.execute(query).scalar_one_or_none()
 

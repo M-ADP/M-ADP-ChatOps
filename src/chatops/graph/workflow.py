@@ -40,7 +40,14 @@ class GraphWorkflow:
         graph.add_edge("prepare_query", "execute_query")
         graph.add_edge("execute_query", "interpret_result")
         graph.add_edge("interpret_result", END)
-        graph.add_edge("plan_command", "wait_for_approval")
+        graph.add_conditional_edges(
+            "plan_command",
+            lambda state: "wait_for_approval" if state.get("request_status") == "pending_approval" else "complete",
+            {
+                "wait_for_approval": "wait_for_approval",
+                "complete": END,
+            },
+        )
         graph.add_conditional_edges(
             "wait_for_approval",
             lambda state: "approved" if state.get("approval_granted") else "rejected",

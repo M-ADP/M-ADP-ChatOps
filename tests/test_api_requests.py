@@ -30,6 +30,10 @@ from chatops.services.auth import build_auth_context
 class StubGraphService:
     status: str = "pending_approval"
     requires_approval: bool = True
+    missing_inputs: list[str] | None = None
+    last_session_context: dict[str, object] | None = None
+    effective_message_text: str | None = None
+    next_request_id: int = 2001
 
     def handle_request(
         self,
@@ -38,9 +42,13 @@ class StubGraphService:
         message_text: str,
         user_role: str | None = None,
         org_id: str | None = None,
+        session_context: dict[str, object] | None = None,
     ) -> GraphResult:
+        self.last_session_context = session_context
+        request_id = self.next_request_id
+        self.next_request_id += 1
         return GraphResult(
-            request_id=2001,
+            request_id=request_id,
             session_id=session_id,
             user_id=user_id,
             status=self.status,
@@ -49,6 +57,8 @@ class StubGraphService:
             intent="execute_command",
             final_response=None,
             selected_operation_ids=["project.create"],
+            missing_inputs=self.missing_inputs,
+            effective_message_text=self.effective_message_text,
         )
 
     def resume_request(
@@ -71,6 +81,8 @@ class StubGraphService:
             intent="execute_command",
             final_response="명령 실행 완료" if approval_granted else "명령 실행 거절",
             selected_operation_ids=["project.create"],
+            missing_inputs=None,
+            effective_message_text=self.effective_message_text,
         )
 
 
@@ -178,6 +190,7 @@ def test_request_schemas_and_auth_context_match_contract() -> None:
         session_id=1001,
         status="processing",
         message=create_payload.message,
+        assistant_message="처리 중입니다.",
     )
     approved = ApproveRequestResponse(request_id=2001, status="approved")
     rejected = RejectRequestResponse(request_id=2001, status="rejected")
@@ -191,6 +204,7 @@ def test_request_schemas_and_auth_context_match_contract() -> None:
     assert auth.user_id == "user-1"
     assert auth.request_id == "req-header-1"
     assert request_response.model_dump()["message"] == "프로젝트 생성해줘"
+    assert request_response.model_dump()["assistant_message"] == "처리 중입니다."
     assert approved.status == "approved"
     assert rejected.status == "rejected"
     assert event.model_dump()["sequence"] == 2
@@ -212,6 +226,205 @@ def test_create_request_returns_processing_status(client: TestClient) -> None:
     assert response.status_code == 202
     assert isinstance(response.json()["request_id"], int)
     assert response.json()["status"] in {"processing", "pending_approval"}
+
+
+def test_create_request_returns_missing_inputs_when_command_needs_more_values(db_session) -> None:
+    app = create_app()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return StubGraphService(
+            status="input_required",
+            requires_approval=False,
+            missing_inputs=["name", "project_name"],
+        )
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/api/v1/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        response = client.post(
+            f"/api/v1/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "프로젝트 수정해줘"},
+        )
+
+        request_id = response.json()["request_id"]
+        detail = client.get(
+            f"/api/v1/sessions/{session['session_id']}/requests/{request_id}",
+            headers={"X-User-Id": "user-1"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "input_required"
+    assert response.json()["missing_inputs"] == ["name", "project_name"]
+    assert response.json()["assistant_message"] is None
+    assert detail.status_code == 200
+    assert detail.json()["missing_inputs"] == ["name", "project_name"]
+    assert detail.json()["assistant_message"] is None
+
+
+def test_create_request_passes_previous_session_message_as_context(db_session) -> None:
+    app = create_app()
+    stub_graph_service = StubGraphService()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return stub_graph_service
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/api/v1/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        repo = RequestRepository(db_session)
+        repo.create(
+            session_id=session["session_id"],
+            user_id="user-1",
+            message_text="프로젝트 456 지워줘",
+            request_id=3001,
+            request_type="command",
+            requires_approval=True,
+        )
+
+        response = client.post(
+            f"/api/v1/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "그거 이름은 chatops-renamed로 바꿔줘"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    assert stub_graph_service.last_session_context == {
+        "last_message_text": "프로젝트 456 지워줘",
+        "last_request_status": "created",
+        "last_request_type": "command",
+        "last_missing_inputs": None,
+        "last_final_response": None,
+        "last_effective_message_text": None,
+    }
+
+
+def test_create_request_passes_input_required_context_for_follow_up(db_session) -> None:
+    app = create_app()
+    stub_graph_service = StubGraphService()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return stub_graph_service
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/api/v1/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        repo = RequestRepository(db_session)
+        request = repo.create(
+            session_id=session["session_id"],
+            user_id="user-1",
+            message_text="프로젝트 하나 만들어줘",
+            request_id=3002,
+            request_type="command",
+            requires_approval=False,
+        )
+        request.status = "input_required"
+        request.missing_inputs = '["name"]'
+        request.final_response = "프로젝트 이름이 필요합니다."
+        db_session.commit()
+
+        response = client.post(
+            f"/api/v1/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "이름은 demo야"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    assert stub_graph_service.last_session_context == {
+        "last_message_text": "프로젝트 하나 만들어줘",
+        "last_request_status": "input_required",
+        "last_request_type": "command",
+        "last_missing_inputs": ["name"],
+        "last_final_response": "프로젝트 이름이 필요합니다.",
+        "last_effective_message_text": None,
+    }
+
+
+def test_create_request_passes_last_effective_message_text_for_multi_turn_follow_up(db_session) -> None:
+    app = create_app()
+    stub_graph_service = StubGraphService(
+        status="input_required",
+        requires_approval=False,
+        missing_inputs=["max_memory", "max_disk"],
+        effective_message_text="프로젝트 하나 만들어줘\n이름은 demo야 cpu는 1이야",
+    )
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return stub_graph_service
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/api/v1/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        first = client.post(
+            f"/api/v1/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "이름은 demo야 cpu는 1이야"},
+        )
+        assert first.status_code == 202
+
+        second = client.post(
+            f"/api/v1/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "메모리는 0.5야 디스크는 10이야"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert second.status_code == 202
+    assert stub_graph_service.last_session_context == {
+        "last_message_text": "이름은 demo야 cpu는 1이야",
+        "last_request_status": "input_required",
+        "last_request_type": "command",
+        "last_missing_inputs": ["max_memory", "max_disk"],
+        "last_final_response": None,
+        "last_effective_message_text": "프로젝트 하나 만들어줘\n이름은 demo야 cpu는 1이야",
+    }
 
 
 def test_approve_request_resumes_pending_command(client: TestClient) -> None:
