@@ -6,7 +6,7 @@
 
 **아키텍처:** 기존 OpenAPI 파일은 원본 소스로 유지하고, operation 단위로 분리된 별도 `ai_registry/` 레이어를 추가한다. 작은 Python 패키지가 OpenAPI를 파싱하고, operation을 정규화하며, 안전한 기본값을 추론해 AI 메타데이터 YAML 파일을 생성한다. 생성된 메타데이터는 LangGraph가 `read`와 `write`를 구분할 만큼의 구조를 제공하면서, 사람이 보강한 필드는 재생성 시 유지해야 한다.
 
-**기술 스택:** Python 3.12+, PyYAML, pytest
+**기술 스택:** Python 3.10+, PyYAML, pytest
 
 ---
 
