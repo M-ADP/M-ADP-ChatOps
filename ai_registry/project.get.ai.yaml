@@ -44,7 +44,3 @@ response_interpretation: 응답 데이터를 현재 상태 요약과 핵심 수�
 plan_template: []
 examples:
 - Get Project Endpoint
-enabled: true
-important_inputs:
-  path:
-  - project_id

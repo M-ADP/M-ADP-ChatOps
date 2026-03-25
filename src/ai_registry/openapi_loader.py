@@ -39,13 +39,6 @@ def normalize_operation_slug(
             for segment in path.split("/")
             if segment and not segment.startswith("{")
         ]
-        path_params = [
-            segment.strip("{}").replace("-", "_")
-            for segment in path.split("/")
-            if segment.startswith("{") and segment.endswith("}")
-        ]
-        if path_params:
-            segments.extend(["by", *path_params])
         if method_lower == "get":
             base = "get_" + "_".join(segments or [source_stem])
         elif method_lower == "post":
