@@ -6,7 +6,7 @@
 
 **아키텍처:** `apis/*.yaml`과 `ai_registry/*.ai.yaml`을 API capability source로 유지하고, 버전드 FastAPI API를 노출하며, 오케스트레이션 로직은 `chatops` 패키지 아래로 분리한다. 현재 상태와 이벤트 이력은 PostgreSQL에 저장하고, LangGraph + PostgreSQL checkpoint를 사용해 승인 대기와 재개를 처리한다. SSE는 저장된 `request_events`를 그대로 흘려주는 얇은 projection 레이어로 유지한다.
 
-**기술 스택:** Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy 2.x, Alembic, psycopg, LangGraph, langgraph-checkpoint-postgres, httpx, PyYAML, pytest
+**기술 스택:** Python 3.10+, FastAPI, Pydantic v2, SQLAlchemy 2.x, Alembic, psycopg, LangGraph, langgraph-checkpoint-postgres, httpx, PyYAML, pytest
 
 ---
 
@@ -23,17 +23,9 @@
 - `src/chatops/app.py`
   - `create_app()` 팩토리와 라우터 등록
 - `src/chatops/config.py`
-  - 과거 단일 설정 호환용 shim
-- `src/chatops/common/config/settings.py`
-  - 공통 env 로더, 앱/DB/Groq/Sonyflake 설정
-- `src/chatops/common/config/project_server.py`
-  - project 서버 base URL 설정
-- `src/chatops/common/config/application_server.py`
-  - application 서버 base URL 설정
-- `src/chatops/common/config/monitoring_server.py`
-  - monitoring 서버 base URL 설정
+  - DB, Groq, downstream base URL, timeout, approval TTL 설정 모델
 - `src/chatops/api/dependencies.py`
-  - DB session, auth context, registry, graph service, client dispatcher dependency
+  - DB session, auth context, registry, graph service 같은 request scope dependency
 - `src/chatops/api/routers/__init__.py`
   - 버전드 라우터 조립
 - `src/chatops/api/routers/health.py`
@@ -74,38 +66,10 @@
   - `X-User-*` 헤더를 `AuthContext`로 파싱
 - `src/chatops/services/llm.py`
   - Groq 기반 분류/응답 생성 인터페이스
-- `src/chatops/services/downstream_dispatcher.py`
-  - operation id 기반 project/application/monitoring client dispatch
+- `src/chatops/services/adapters.py`
+  - metadata + OpenAPI source 기반 downstream API 실행
 - `src/chatops/services/events.py`
   - request event append와 sequence 기반 replay 지원
-- `src/chatops/core/client/http.py`
-  - async HTTP client protocol
-- `src/chatops/core/client/project.py`
-  - project client protocol
-- `src/chatops/core/client/application.py`
-  - application client protocol
-- `src/chatops/core/client/monitoring.py`
-  - monitoring client protocol
-- `src/chatops/dependencies/client/project.py`
-  - project fake/real client 선택
-- `src/chatops/dependencies/client/application.py`
-  - application fake/real client 선택
-- `src/chatops/dependencies/client/monitoring.py`
-  - monitoring fake/real client 선택
-- `src/chatops/infra/client/asyncio_http.py`
-  - aiohttp 기반 HTTP 구현
-- `src/chatops/infra/client/project_impl.py`
-  - project real client 구현
-- `src/chatops/infra/client/application_impl.py`
-  - application real client 구현
-- `src/chatops/infra/client/monitoring_impl.py`
-  - monitoring real client 구현
-- `src/chatops/infra/client/fake_project_impl.py`
-  - project fake client 구현
-- `src/chatops/infra/client/fake_application_impl.py`
-  - application fake client 구현
-- `src/chatops/infra/client/fake_monitoring_impl.py`
-  - monitoring fake client 구현
 - `src/chatops/graph/state.py`
   - LangGraph state 정의
 - `src/chatops/graph/nodes.py`
@@ -130,12 +94,8 @@
   - 후보 선택과 safety filter 테스트
 - `tests/test_graph_service.py`
   - inquiry/query/command 상태 전이 테스트
-- `tests/test_downstream_dispatch.py`
-  - operation id 기반 dispatcher 테스트
-- `tests/test_dependencies.py`
-  - fake/real client 선택 테스트
-- `tests/test_client_config.py`
-  - 공통 config와 fake client 테스트
+- `tests/test_adapter_service.py`
+  - downstream 호출 정규화 테스트
 - `.env.example`
   - 필요한 환경 변수와 예시 값
 
