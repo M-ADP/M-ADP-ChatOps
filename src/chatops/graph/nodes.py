@@ -147,7 +147,7 @@ class WorkflowNodes:
             "approval_granted": bool(approved),
             "request_status": "approved" if approved else "rejected",
             "requires_approval": False,
-            "final_response": state.get("final_response") if approved else "명령 실행이 거절되었습니다.",
+            "final_response": state.get("final_response") if approved else "알겠습니다. 요청을 취소했습니다. 다른 작업이 필요하시면 말씀해주세요.",
         }
 
     def execute_command(self, state: GraphState) -> GraphState:
@@ -265,7 +265,8 @@ class WorkflowNodes:
         return f"{last_message_text}\n{message_text}".strip()
 
     def _should_continue_previous_request(self, message_text: str, session_context: dict[str, Any]) -> bool:
-        if session_context.get("last_request_status") != RequestStatus.INPUT_REQUIRED.value:
+        last_status = session_context.get("last_request_status")
+        if last_status not in (RequestStatus.INPUT_REQUIRED.value, RequestStatus.PENDING_APPROVAL.value):
             return False
         if not isinstance(message_text, str) or not message_text.strip():
             return False
@@ -302,6 +303,16 @@ class WorkflowNodes:
             "대상 사용자",
             "멤버",
             "소유권",
+            # 정정 마커
+            "바꿔",
+            "변경",
+            "수정",
+            "고쳐",
+            "대신",
+            "말고",
+            "로 해",
+            "이 아니라",
+            "가 아니라",
         )
         return any(marker in message_text for marker in supplement_markers)
 
@@ -536,14 +547,14 @@ class WorkflowNodes:
 
     def _build_command_success_message(self, operation_id: str, summary: str) -> str:
         messages = {
-            "project.create": "프로젝트를 생성했습니다.",
+            "project.create": "프로젝트를 생성했습니다. 프로젝트 설정을 변경하거나 앱을 추가할 수 있습니다.",
             "project.update_name": "프로젝트 이름을 변경했습니다.",
             "project.update_resource": "프로젝트 리소스를 변경했습니다.",
             "project.delete": "프로젝트를 삭제했습니다.",
             "project.add_member": "프로젝트 멤버를 추가했습니다.",
             "project.remove_member": "프로젝트 멤버를 제거했습니다.",
             "project.transfer_ownership": "프로젝트 소유권을 이전했습니다.",
-            "application.create_apps": "애플리케이션을 생성했습니다.",
+            "application.create_apps": "애플리케이션을 생성했습니다. GitHub 연결이나 리소스 설정을 진행할 수 있습니다.",
             "application.delete_apps": "애플리케이션을 삭제했습니다.",
             "application.patch_apps_resources": "애플리케이션 자원을 변경했습니다.",
             "application.patch_apps_github": "애플리케이션 GitHub 연결 정보를 변경했습니다.",
@@ -565,7 +576,9 @@ class WorkflowNodes:
             "application.patch_apps_github": "애플리케이션 GitHub 연결 정보 변경",
         }
         subject = subjects.get(operation_id, "요청한 작업")
-        return f"{subject}에 실패했습니다. {summary}"
+        if summary and summary.strip():
+            return f"{subject}에 실패했습니다. {summary} 입력값을 확인하고 다시 시도해주세요."
+        return f"{subject}에 실패했습니다. 입력값을 확인하고 다시 시도해주세요."
 
     def _is_reference_satisfied(self, field_name: str, references: dict[str, Any]) -> bool:
         reference_aliases = {

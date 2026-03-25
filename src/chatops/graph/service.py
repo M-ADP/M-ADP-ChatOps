@@ -26,6 +26,7 @@ class GraphResult:
     selected_operation_ids: list[str]
     missing_inputs: list[str] | None = None
     effective_message_text: str | None = None
+    resolved_references: dict[str, object] | None = None
 
 
 class GraphService:
@@ -129,7 +130,16 @@ class GraphService:
             selected_operation_ids=list(state.get("selected_operation_ids", [])),
             missing_inputs=list(state.get("missing_inputs", [])) or None,
             effective_message_text=state.get("effective_message_text"),
+            resolved_references=self._extract_references(state),
         )
+
+    def _extract_references(self, state: dict[str, object]) -> dict[str, object] | None:
+        resolved_inputs = state.get("resolved_inputs")
+        if isinstance(resolved_inputs, dict):
+            refs = resolved_inputs.get("references")
+            if isinstance(refs, dict) and refs:
+                return dict(refs)
+        return None
 
     def _thread_config(self, request_id: int) -> dict[str, object]:
         return {"configurable": {"thread_id": str(request_id)}}

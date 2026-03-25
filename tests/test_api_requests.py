@@ -320,6 +320,7 @@ def test_create_request_passes_previous_session_message_as_context(db_session) -
         "last_missing_inputs": None,
         "last_final_response": None,
         "last_effective_message_text": None,
+        "last_resolved_references": None,
     }
 
 
@@ -373,6 +374,7 @@ def test_create_request_passes_input_required_context_for_follow_up(db_session) 
         "last_missing_inputs": ["name"],
         "last_final_response": "프로젝트 이름이 필요합니다.",
         "last_effective_message_text": None,
+        "last_resolved_references": None,
     }
 
 
@@ -424,7 +426,90 @@ def test_create_request_passes_last_effective_message_text_for_multi_turn_follow
         "last_missing_inputs": ["max_memory", "max_disk"],
         "last_final_response": None,
         "last_effective_message_text": "프로젝트 하나 만들어줘\n이름은 demo야 cpu는 1이야",
+        "last_resolved_references": None,
     }
+
+
+def test_natural_language_approve_triggers_execution(db_session) -> None:
+    """사용자가 '실행해'라고 말하면 pending_approval 요청이 승인된다."""
+    app = create_app()
+    stub = StubGraphService()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return stub
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/api/v1/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        first = client.post(
+            f"/api/v1/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "프로젝트 생성해줘 name=demo max_cpu=1 max_memory=0.5 max_disk=10"},
+        )
+        assert first.json()["status"] == "pending_approval"
+
+        second = client.post(
+            f"/api/v1/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "실행해"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert second.status_code == 202
+    assert second.json()["status"] == "completed"
+    assert second.json()["assistant_message"] == "명령 실행 완료"
+
+
+def test_natural_language_reject_cancels_pending_command(db_session) -> None:
+    """사용자가 '취소해'라고 말하면 pending_approval 요청이 거절된다."""
+    app = create_app()
+    stub = StubGraphService()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return stub
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/api/v1/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        first = client.post(
+            f"/api/v1/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "프로젝트 생성해줘 name=demo max_cpu=1 max_memory=0.5 max_disk=10"},
+        )
+        assert first.json()["status"] == "pending_approval"
+
+        second = client.post(
+            f"/api/v1/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "취소해"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert second.status_code == 202
+    assert second.json()["status"] == "rejected"
+    assert second.json()["assistant_message"] == "명령 실행 거절"
 
 
 def test_approve_request_resumes_pending_command(client: TestClient) -> None:

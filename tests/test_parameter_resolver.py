@@ -364,3 +364,151 @@ def test_resolve_project_add_member_from_natural_language_message() -> None:
     assert resolved == {
         "references": {"project_name": "demo", "target_nickname": "alice"},
     }
+
+
+def test_korean_unit_giga_in_memory_field() -> None:
+    """'메모리는 1기가' 표현을 처리한다."""
+    entry = RegistryEntry(
+        id="project.create",
+        source_file="apis/project.yaml",
+        operation_id=None,
+        path="/projects",
+        method="POST",
+        summary="프로젝트 생성",
+        capability="프로젝트 생성",
+        usable_in=("command",),
+        operation_kind="write",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="medium",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [],
+            "query": [],
+            "body": {"required": True, "required_fields": ["name"]},
+        },
+        important_inputs={
+            "path": [],
+            "query": [],
+            "body": ["name", "max_cpu", "max_memory", "max_disk"],
+        },
+    )
+    resolver = ParameterResolverService()
+    resolved = resolver.resolve(entry, "이름은 demo야 cpu는 1이야 메모리는 2기가 디스크는 10gb")
+    body = resolved.get("body", {})
+    assert body.get("max_memory") == 2
+    assert body.get("max_disk") == 10
+
+
+def test_korean_number_cpu_hana() -> None:
+    """'cpu는 하나' 표현을 처리한다."""
+    entry = RegistryEntry(
+        id="project.create",
+        source_file="apis/project.yaml",
+        operation_id=None,
+        path="/projects",
+        method="POST",
+        summary="프로젝트 생성",
+        capability="프로젝트 생성",
+        usable_in=("command",),
+        operation_kind="write",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="medium",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [],
+            "query": [],
+            "body": {"required": True, "required_fields": ["name"]},
+        },
+        important_inputs={
+            "path": [],
+            "query": [],
+            "body": ["name", "max_cpu", "max_memory", "max_disk"],
+        },
+    )
+    resolver = ParameterResolverService()
+    resolved = resolver.resolve(entry, "이름은 demo야 cpu는 하나 메모리는 1이야 디스크는 10이야")
+    body = resolved.get("body", {})
+    assert body.get("max_cpu") == 1
+
+
+def test_entity_memory_resolves_project_from_previous_request() -> None:
+    """'그 프로젝트' 표현이 이전 요청의 entity memory에서 프로젝트명을 가져온다."""
+    entry = RegistryEntry(
+        id="project.delete",
+        source_file="apis/project.yaml",
+        operation_id=None,
+        path="/projects/{project_id}",
+        method="DELETE",
+        summary="프로젝트 삭제",
+        capability="프로젝트 삭제",
+        usable_in=("command",),
+        operation_kind="delete",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="high",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [{"name": "project_id", "required": True}],
+            "query": [],
+            "body": None,
+        },
+    )
+    resolver = ParameterResolverService()
+    resolved = resolver.resolve(
+        entry,
+        "그 프로젝트 삭제해줘",
+        session_context={
+            "last_resolved_references": {"project_name": "demo", "application_name": "api-demo"},
+        },
+    )
+    assert resolved.get("references", {}).get("project_name") == "demo"
+
+
+def test_entity_memory_resolves_app_from_previous_request() -> None:
+    """'방금 만든 앱' 표현이 이전 entity memory에서 앱명을 가져온다."""
+    entry = RegistryEntry(
+        id="application.delete_apps",
+        source_file="apis/application.yaml",
+        operation_id=None,
+        path="/apps",
+        method="DELETE",
+        summary="애플리케이션 삭제",
+        capability="애플리케이션 삭제",
+        usable_in=("command",),
+        operation_kind="delete",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="high",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [],
+            "query": [],
+            "body": None,
+        },
+        important_inputs={"path": [], "query": [], "body": ["project_id", "application_id"]},
+    )
+    resolver = ParameterResolverService()
+    resolved = resolver.resolve(
+        entry,
+        "방금 만든 앱 삭제해줘",
+        session_context={
+            "last_resolved_references": {"project_name": "demo", "application_name": "api-demo"},
+        },
+    )
+    refs = resolved.get("references", {})
+    assert refs.get("project_name") == "demo"
+    assert refs.get("application_name") == "api-demo"

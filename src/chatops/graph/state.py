@@ -25,4 +25,5 @@ class GraphState(TypedDict, total=False):
     resolved_inputs: dict[str, Any] | None
     query_result: dict[str, Any] | None
     command_result: dict[str, Any] | None
+    resolved_references: dict[str, Any] | None
     final_response: str | None

@@ -16,6 +16,7 @@ from chatops.schemas.requests import (
     RejectRequestResponse,
     RequestResponse,
 )
+from chatops.services.approval_intent import ApprovalIntent, detect_approval_intent
 from chatops.services.events import EventService
 
 
@@ -38,6 +39,21 @@ def _load_missing_inputs(raw_value: str | None) -> list[str] | None:
     if not isinstance(loaded, list):
         return None
     return [str(item) for item in loaded]
+
+
+def _dump_json_field(value: dict | list | None) -> str | None:
+    if not value:
+        return None
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _load_json_field(raw_value: str | None) -> dict | list | None:
+    if not raw_value:
+        return None
+    try:
+        return json.loads(raw_value)
+    except json.JSONDecodeError:
+        return None
 
 
 def _load_request_or_404(db_session: Session, request_id: int, user_id: str) -> RequestRecord:
@@ -69,7 +85,32 @@ def create_request(
             "last_request_type": previous_request.request_type,
             "last_missing_inputs": _load_missing_inputs(previous_request.missing_inputs),
             "last_final_response": previous_request.final_response,
+            "last_resolved_references": _load_json_field(previous_request.resolved_references),
         }
+
+    # 자연어 승인/거절: 이전 요청이 pending_approval이면 intent 감지
+    if previous_request is not None and previous_request.status == "pending_approval":
+        intent = detect_approval_intent(payload.message)
+        if intent == ApprovalIntent.APPROVE:
+            return _handle_natural_language_approval(
+                previous_request=previous_request,
+                message_text=payload.message,
+                session_id=session_id,
+                auth=auth,
+                db_session=db_session,
+                graph_service=graph_service,
+            )
+        if intent == ApprovalIntent.REJECT:
+            return _handle_natural_language_rejection(
+                previous_request=previous_request,
+                message_text=payload.message,
+                session_id=session_id,
+                auth=auth,
+                db_session=db_session,
+                graph_service=graph_service,
+            )
+        # CORRECTION and UNKNOWN fall through to normal flow
+        # CORRECTION will be handled by re-planning with corrected values in session context
 
     graph_result = graph_service.handle_request(
         session_id=session_id,
@@ -91,6 +132,7 @@ def create_request(
     record.status = graph_result.status
     record.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
     record.final_response = graph_result.final_response
+    record.resolved_references = _dump_json_field(graph_result.resolved_references)
     db_session.commit()
     db_session.refresh(record)
     event_service = EventService(db_session)
@@ -145,6 +187,108 @@ def create_request(
         final_response=record.final_response,
         created_at=record.created_at,
         updated_at=record.updated_at,
+    )
+
+
+def _handle_natural_language_approval(
+    previous_request: RequestRecord,
+    message_text: str,
+    session_id: int,
+    auth: AuthContext,
+    db_session: Session,
+    graph_service: GraphService,
+) -> RequestResponse:
+    """Handle '응', '실행해' etc. as approval for the pending request."""
+    graph_result = graph_service.resume_request(
+        request_id=previous_request.id,
+        session_id=session_id,
+        user_id=auth.user_id,
+        message_text=previous_request.message_text,
+        approval_granted=True,
+        user_role=auth.user_role,
+        org_id=auth.org_id,
+    )
+    previous_request.status = graph_result.status
+    previous_request.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
+    previous_request.final_response = graph_result.final_response
+    previous_request.requires_approval = graph_result.requires_approval
+    db_session.commit()
+    db_session.refresh(previous_request)
+    event_type = "execution.completed" if previous_request.status == "completed" else "execution.failed"
+    EventService(db_session).append_event(
+        request_id=previous_request.id,
+        session_id=previous_request.session_id,
+        event_type=event_type,
+        payload={
+            "type": event_type,
+            "request_id": previous_request.id,
+            "session_id": previous_request.session_id,
+            "status": previous_request.status,
+            "final_response": previous_request.final_response,
+        },
+    )
+    return RequestResponse(
+        request_id=previous_request.id,
+        session_id=previous_request.session_id,
+        status=previous_request.status,
+        message=message_text,
+        assistant_message=previous_request.final_response,
+        request_type=previous_request.request_type,
+        requires_approval=previous_request.requires_approval,
+        missing_inputs=_load_missing_inputs(previous_request.missing_inputs),
+        final_response=previous_request.final_response,
+        created_at=previous_request.created_at,
+        updated_at=previous_request.updated_at,
+    )
+
+
+def _handle_natural_language_rejection(
+    previous_request: RequestRecord,
+    message_text: str,
+    session_id: int,
+    auth: AuthContext,
+    db_session: Session,
+    graph_service: GraphService,
+) -> RequestResponse:
+    """Handle '아니', '취소해' etc. as rejection for the pending request."""
+    graph_result = graph_service.resume_request(
+        request_id=previous_request.id,
+        session_id=session_id,
+        user_id=auth.user_id,
+        message_text=previous_request.message_text,
+        approval_granted=False,
+        user_role=auth.user_role,
+        org_id=auth.org_id,
+    )
+    previous_request.status = graph_result.status
+    previous_request.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
+    previous_request.final_response = graph_result.final_response
+    previous_request.requires_approval = graph_result.requires_approval
+    db_session.commit()
+    db_session.refresh(previous_request)
+    EventService(db_session).append_event(
+        request_id=previous_request.id,
+        session_id=previous_request.session_id,
+        event_type="approval.rejected",
+        payload={
+            "type": "approval.rejected",
+            "request_id": previous_request.id,
+            "session_id": previous_request.session_id,
+            "status": previous_request.status,
+        },
+    )
+    return RequestResponse(
+        request_id=previous_request.id,
+        session_id=previous_request.session_id,
+        status=previous_request.status,
+        message=message_text,
+        assistant_message=previous_request.final_response,
+        request_type=previous_request.request_type,
+        requires_approval=previous_request.requires_approval,
+        missing_inputs=_load_missing_inputs(previous_request.missing_inputs),
+        final_response=previous_request.final_response,
+        created_at=previous_request.created_at,
+        updated_at=previous_request.updated_at,
     )
 
 

@@ -40,6 +40,7 @@ class RequestRecord(Base):
     requires_approval: Mapped[bool] = mapped_column(Boolean, default=False)
     missing_inputs: Mapped[str | None] = mapped_column(Text(), nullable=True)
     final_response: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    resolved_references: Mapped[str | None] = mapped_column(Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

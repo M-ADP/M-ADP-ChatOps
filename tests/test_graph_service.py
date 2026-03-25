@@ -252,7 +252,7 @@ def test_command_resume_executes_after_approval() -> None:
 
     assert result.status == "completed"
     assert result.requires_approval is False
-    assert result.final_response == "프로젝트를 생성했습니다."
+    assert result.final_response == "프로젝트를 생성했습니다. 프로젝트 설정을 변경하거나 앱을 추가할 수 있습니다."
 
 
 def test_command_resume_passes_resolved_inputs_to_adapter() -> None:
@@ -704,7 +704,7 @@ def test_command_downstream_failure_returns_failed_status() -> None:
     )
 
     assert result.status == "failed"
-    assert result.final_response == "프로젝트 생성에 실패했습니다. 요청값이 올바르지 않습니다."
+    assert result.final_response == "프로젝트 생성에 실패했습니다. 요청값이 올바르지 않습니다. 입력값을 확인하고 다시 시도해주세요."
 
 
 def test_project_update_without_target_name_requests_project_name_instead_of_id() -> None:
@@ -1049,3 +1049,82 @@ def test_application_github_follow_up_uses_previous_effective_message() -> None:
     assert "대상 프로젝트 demo" in second.final_response
     assert "앱 이름 api-demo" in second.final_response
     assert "GitHub 소유자 M-ADP" in second.final_response
+
+
+def test_correction_during_pending_approval_replans_with_new_values() -> None:
+    """pending_approval 상태에서 '아니 CPU는 2로 해줘'로 정정하면 새 값으로 re-plan된다."""
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=FakeRegistryService(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    first = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="이름은 demo야 cpu는 1이야 메모리는 0.5야 디스크는 10이야",
+        session_context={
+            "last_message_text": "프로젝트 하나 만들어줘",
+            "last_request_status": "input_required",
+            "last_request_type": "command",
+        },
+    )
+    assert first.status == "pending_approval"
+
+    # 정정: CPU를 2로 변경
+    second = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="아니 cpu는 2로 바꿔줘",
+        session_context={
+            "last_message_text": "이름은 demo야 cpu는 1이야 메모리는 0.5야 디스크는 10이야",
+            "last_effective_message_text": first.effective_message_text,
+            "last_request_status": "pending_approval",
+            "last_request_type": "command",
+        },
+    )
+
+    assert second.status == "pending_approval"
+    assert second.final_response is not None
+    assert "최대 CPU 2" in second.final_response
+    assert "최대 메모리 0.5GB" in second.final_response
+    assert "프로젝트 이름 demo" in second.final_response
+
+
+def test_correction_memory_value_during_pending_approval() -> None:
+    """pending_approval에서 '메모리는 1기가로 해줘'로 정정하면 메모리 값이 변경된다."""
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=FakeRegistryService(),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    first = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="이름은 demo야 cpu는 1이야 메모리는 0.5야 디스크는 10이야",
+        session_context={
+            "last_message_text": "프로젝트 하나 만들어줘",
+            "last_request_status": "input_required",
+            "last_request_type": "command",
+        },
+    )
+    assert first.status == "pending_approval"
+
+    second = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="근데 메모리는 1로 변경해줘",
+        session_context={
+            "last_message_text": "이름은 demo야 cpu는 1이야 메모리는 0.5야 디스크는 10이야",
+            "last_effective_message_text": first.effective_message_text,
+            "last_request_status": "pending_approval",
+            "last_request_type": "command",
+        },
+    )
+
+    assert second.status == "pending_approval"
+    assert second.final_response is not None
+    assert "최대 메모리 1GB" in second.final_response
