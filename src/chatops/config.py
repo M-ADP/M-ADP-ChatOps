@@ -16,7 +16,6 @@ def resolve_env_file(
 
 
 class Settings(BaseSettings):
-    api_prefix: str = "/api/v1"
     database_url: str
     groq_api_key: str
     groq_model: str = "llama-3.3-70b-versatile"

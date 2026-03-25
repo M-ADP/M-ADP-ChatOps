@@ -12,7 +12,6 @@ def test_settings_have_required_defaults() -> None:
         groq_api_key="test-groq-api-key",
     )
 
-    assert settings.api_prefix == "/api/v1"
     assert settings.resource_server_base_url == "http://localhost:8001"
     assert settings.application_server_base_url == "http://localhost:8003"
     assert settings.user_server_base_url == "http://localhost:8002"

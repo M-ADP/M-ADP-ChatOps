@@ -57,7 +57,7 @@ def test_session_schemas_use_api_contract_fields() -> None:
 
 def test_create_session_returns_owned_session(client: TestClient) -> None:
     response = client.post(
-        "/api/v1/sessions",
+        "/sessions",
         headers={"X-User-Id": "user-1"},
         json={"title": "운영 세션"},
     )

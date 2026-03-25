@@ -7,7 +7,7 @@ from chatops.api.routers.stream import router as stream_router
 
 
 def build_api_router() -> APIRouter:
-    router = APIRouter(prefix="/api/v1")
+    router = APIRouter()
     router.include_router(health_router)
     router.include_router(session_router)
     router.include_router(request_router)

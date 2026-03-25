@@ -99,6 +99,29 @@
 - `.env.example`
   - 필요한 환경 변수와 예시 값
 
+## API 목록
+
+| # | Method | Path | 설명 | 인증 | 응답 코드 |
+|---|--------|------|------|------|-----------|
+| 1 | GET | `/health` | 헬스체크 | - | 200 |
+| 2 | POST | `/sessions` | 세션 생성 | X-User-Id | 201 |
+| 3 | GET | `/sessions/{session_id}` | 세션 조회 | X-User-Id | 200 |
+| 4 | POST | `/sessions/{session_id}/requests` | 요청 생성 (자연어 승인/거절 포함) | X-User-Id | 202 |
+| 5 | GET | `/sessions/{session_id}/requests/{request_id}` | 요청 조회 | X-User-Id | 200 |
+| 6 | POST | `/sessions/{session_id}/requests/{request_id}/approve` | 명시적 요청 승인 | X-User-Id | 200 |
+| 7 | POST | `/sessions/{session_id}/requests/{request_id}/reject` | 명시적 요청 거절 | X-User-Id | 200 |
+| 8 | GET | `/sessions/{session_id}/requests/{request_id}/stream` | SSE 이벤트 스트리밍 | X-User-Id | 200 |
+
+**공통 규칙:**
+- 모든 엔드포인트(health 제외)는 `X-User-Id` 헤더 필수
+- `user_id + session_id` 소유권 검사 강제
+- `approve/reject`는 `pending_approval` 상태에서만 허용, 중복 시 `409`
+- SSE는 `Last-Event-ID` 기반 replay 지원
+
+**SSE 이벤트 타입:** `request.created`, `approval.required`, `response.completed`, `execution.completed`, `execution.failed`, `approval.rejected`
+
+---
+
 ## 청크 1: 서비스 골격
 
 ### 작업 1: 샘플 진입점을 FastAPI 앱 팩토리와 health 라우트로 교체
@@ -123,7 +146,7 @@ from chatops.app import create_app
 def test_healthcheck_returns_ok() -> None:
     client = TestClient(create_app())
 
-    response = client.get("/api/v1/health")
+    response = client.get("/health")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
@@ -140,7 +163,7 @@ def test_healthcheck_returns_ok() -> None:
 
 - `src/chatops/app.py`에 `create_app()` 구현
 - `src/chatops/api/routers/__init__.py`에 버전드 라우터 조립 구현
-- `src/chatops/api/routers/health.py`에 `GET /api/v1/health` 구현
+- `src/chatops/api/routers/health.py`에 `GET /health` 구현
 - `main.py`를 아래 형태로 교체
 
 ```python
@@ -178,7 +201,6 @@ from chatops.config import Settings
 def test_settings_have_required_defaults() -> None:
     settings = Settings()
 
-    assert settings.api_prefix == "/api/v1"
     assert settings.request_stream_keepalive_seconds == 15
     assert settings.approval_ttl_seconds == 900
 ```
@@ -208,7 +230,6 @@ pytest
 
 `src/chatops/config.py`에 아래 기본값을 가진 `Settings` 구현:
 
-- `api_prefix="/api/v1"`
 - `database_url`
 - `groq_api_key`
 - `groq_model`
@@ -381,7 +402,7 @@ from chatops.app import create_app
 def test_create_session_requires_x_user_id() -> None:
     client = TestClient(create_app())
 
-    response = client.post("/api/v1/sessions", json={})
+    response = client.post("/sessions", json={})
 
     assert response.status_code == 401
 ```
@@ -536,10 +557,10 @@ from chatops.app import create_app
 
 def test_create_request_returns_processing_status() -> None:
     client = TestClient(create_app())
-    session = client.post("/api/v1/sessions", headers={"X-User-Id": "user-1"}, json={}).json()
+    session = client.post("/sessions", headers={"X-User-Id": "user-1"}, json={}).json()
 
     response = client.post(
-        f"/api/v1/sessions/{session['session_id']}/requests",
+        f"/sessions/{session['session_id']}/requests",
         headers={"X-User-Id": "user-1"},
         json={"message": "프로젝트 생성해줘"},
     )
@@ -557,12 +578,12 @@ def test_create_request_returns_processing_status() -> None:
 
 아래 API 노출:
 
-- `POST /api/v1/sessions`
-- `GET /api/v1/sessions/{session_id}`
-- `POST /api/v1/sessions/{session_id}/requests`
-- `GET /api/v1/sessions/{session_id}/requests/{request_id}`
-- `POST /api/v1/sessions/{session_id}/requests/{request_id}/approve`
-- `POST /api/v1/sessions/{session_id}/requests/{request_id}/reject`
+- `POST /sessions`
+- `GET /sessions/{session_id}`
+- `POST /sessions/{session_id}/requests`
+- `GET /sessions/{session_id}/requests/{request_id}`
+- `POST /sessions/{session_id}/requests/{request_id}/approve`
+- `POST /sessions/{session_id}/requests/{request_id}/reject`
 
 규칙:
 
@@ -592,7 +613,7 @@ def test_create_request_returns_processing_status() -> None:
 ```python
 def test_request_stream_replays_events_after_sequence(client, seeded_request_event) -> None:
     response = client.get(
-        f"/api/v1/sessions/{seeded_request_event.session_id}/requests/{seeded_request_event.request_id}/stream",
+        f"/sessions/{seeded_request_event.session_id}/requests/{seeded_request_event.request_id}/stream",
         headers={"X-User-Id": "user-1", "Last-Event-ID": "1"},
     )
 
@@ -612,7 +633,7 @@ def test_request_stream_replays_events_after_sequence(client, seeded_request_eve
 구현 항목:
 
 - request-local monotonic `sequence`를 갖는 append-only event writer
-- `GET /api/v1/sessions/{session_id}/requests/{request_id}/stream` SSE 엔드포인트
+- `GET /sessions/{session_id}/requests/{request_id}/stream` SSE 엔드포인트
 - SSE `id:` 값을 `sequence`로 설정
 - `Last-Event-ID` 기준 replay
 - `request_stream_keepalive_seconds`마다 keepalive comment 전송
@@ -703,7 +724,7 @@ adapter 계약 구현:
 ```python
 def test_approve_resumes_existing_command_from_checkpoint(client, pending_command_request) -> None:
     response = client.post(
-        f"/api/v1/sessions/{pending_command_request.session_id}/requests/{pending_command_request.id}/approve",
+        f"/sessions/{pending_command_request.session_id}/requests/{pending_command_request.id}/approve",
         headers={"X-User-Id": pending_command_request.user_id},
     )
 
@@ -770,11 +791,11 @@ idempotency 유지:
 
 수동 검증 항목:
 
-- `POST /api/v1/sessions`
-- `POST /api/v1/sessions/{id}/requests` with inquiry text
-- `POST /api/v1/sessions/{id}/requests` with query text
-- `POST /api/v1/sessions/{id}/requests` with command text
-- `GET /api/v1/sessions/{id}/requests/{request_id}/stream`
+- `POST /sessions`
+- `POST /sessions/{id}/requests` with inquiry text
+- `POST /sessions/{id}/requests` with query text
+- `POST /sessions/{id}/requests` with command text
+- `GET /sessions/{id}/requests/{request_id}/stream`
 - `POST /approve`
 - `POST /reject`
 

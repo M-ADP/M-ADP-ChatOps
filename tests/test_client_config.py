@@ -19,7 +19,6 @@ def test_server_configs_have_expected_defaults() -> None:
     application_server = ApplicationServerConfig(_env_file=None)
     monitoring_server = MonitoringServerConfig(_env_file=None)
 
-    assert app_config.api_prefix == "/api/v1"
     assert app_config.request_stream_keepalive_seconds == 15
     assert app_config.approval_ttl_seconds == 900
     assert db_config.url.startswith("postgresql")

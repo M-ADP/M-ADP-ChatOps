@@ -102,7 +102,7 @@ def test_request_stream_replays_events_after_sequence(client: TestClient, db_ses
     )
 
     response = client.get(
-        f"/api/v1/sessions/{session.id}/requests/{request.id}/stream",
+        f"/sessions/{session.id}/requests/{request.id}/stream",
         headers={"X-User-Id": "user-1", "Last-Event-ID": "1"},
     )
 
@@ -116,20 +116,20 @@ def test_request_stream_replays_events_after_sequence(client: TestClient, db_ses
 
 def test_create_request_emits_initial_events(client: TestClient) -> None:
     session = client.post(
-        "/api/v1/sessions",
+        "/sessions",
         headers={"X-User-Id": "user-1"},
         json={},
     ).json()
 
     create_response = client.post(
-        f"/api/v1/sessions/{session['session_id']}/requests",
+        f"/sessions/{session['session_id']}/requests",
         headers={"X-User-Id": "user-1"},
         json={"message": "프로젝트 생성해줘"},
     )
     request_id = create_response.json()["request_id"]
 
     stream_response = client.get(
-        f"/api/v1/sessions/{session['session_id']}/requests/{request_id}/stream",
+        f"/sessions/{session['session_id']}/requests/{request_id}/stream",
         headers={"X-User-Id": "user-1"},
     )
 

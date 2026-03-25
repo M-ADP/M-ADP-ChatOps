@@ -440,13 +440,13 @@ Adapter는 실제 API 호출을 담당한다.
 
 기본 API는 다음과 같다.
 
-- `POST /api/v1/sessions`
-- `GET /api/v1/sessions/{session_id}`
-- `POST /api/v1/sessions/{session_id}/requests`
-- `GET /api/v1/sessions/{session_id}/requests/{request_id}`
-- `GET /api/v1/sessions/{session_id}/requests/{request_id}/stream`
-- `POST /api/v1/sessions/{session_id}/requests/{request_id}/approve`
-- `POST /api/v1/sessions/{session_id}/requests/{request_id}/reject`
+- `POST /sessions`
+- `GET /sessions/{session_id}`
+- `POST /sessions/{session_id}/requests`
+- `GET /sessions/{session_id}/requests/{request_id}`
+- `GET /sessions/{session_id}/requests/{request_id}/stream`
+- `POST /sessions/{session_id}/requests/{request_id}/approve`
+- `POST /sessions/{session_id}/requests/{request_id}/reject`
 
 ## SSE 계약
 

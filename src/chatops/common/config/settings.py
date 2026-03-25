@@ -49,7 +49,6 @@ class AppConfig(LoggedSettings):
         extra="ignore",
     )
 
-    api_prefix: str = "/api/v1"
     request_stream_keepalive_seconds: int = 15
     approval_ttl_seconds: int = 900
     downstream_timeout_seconds: int = 10
