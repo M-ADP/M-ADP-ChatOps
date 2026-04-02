@@ -917,3 +917,135 @@ async def test_monitoring_query_dispatches_to_monitoring_client() -> None:
         )
     ]
     assert project_client.calls == [("list_projects", {"user_id": "1", "role": "admin"})]
+
+
+@pytest.mark.anyio
+async def test_command_dispatch_reuses_prechecked_resolved_ids() -> None:
+    project_client = RecordingProjectClient()
+    user_client = RecordingUserClient()
+    dispatcher = DownstreamDispatcher(
+        project_client=project_client,
+        application_client=RecordingApplicationClient(),
+        monitoring_client=RecordingMonitoringClient(),
+        user_client=user_client,
+    )
+
+    result = await dispatcher.execute_command(
+        _entry(
+            entry_id="project.remove_member",
+            method="DELETE",
+            path="/projects/{project_id}/members/{target_user_id}",
+            source_file="apis/project.yaml",
+            operation_kind="delete",
+        ),
+        user_id="1",
+        user_role="admin",
+        resolved_inputs={
+            "references": {"project_name": "demo", "target_nickname": "alice"},
+            "resolved_ids": {"project_id": 98, "target_user_id": 321},
+        },
+    )
+
+    assert result["success"] is True
+    assert project_client.calls == [
+        (
+            "remove_project_member",
+            {"user_id": "1", "role": "admin", "project_id": 98, "target_user_id": 321},
+        )
+    ]
+    assert user_client.calls == []
+
+
+@pytest.mark.anyio
+async def test_application_resolution_falls_back_to_list_apps_on_not_found() -> None:
+    project_client = RecordingProjectClient()
+
+    @dataclass
+    class FallbackApplicationClient(RecordingApplicationClient):
+        async def get_apps_status(
+            self,
+            *,
+            user_id: str,
+            role: str | None,
+            project_id: int,
+            app_name: str,
+        ) -> dict[str, object]:
+            self.calls.append(
+                (
+                    "get_apps_status",
+                    {"user_id": user_id, "role": role, "project_id": project_id, "app_name": app_name},
+                )
+            )
+            return {"success": False, "summary": "대상 리소스를 찾지 못했습니다.", "status_code": 404}
+
+        async def get_apps(self, *, user_id: str, role: str | None, project_id: int) -> dict[str, object]:
+            self.calls.append(("get_apps", {"user_id": user_id, "role": role, "project_id": project_id}))
+            return {
+                "summary": "demo 프로젝트 앱 목록: api-demo",
+                "items": [{"id": 777, "name": "api-demo"}],
+            }
+
+    application_client = FallbackApplicationClient()
+    dispatcher = DownstreamDispatcher(
+        project_client=project_client,
+        application_client=application_client,
+        monitoring_client=RecordingMonitoringClient(),
+    )
+
+    result = await dispatcher.execute_command(
+        _entry(
+            entry_id="application.delete_apps",
+            method="DELETE",
+            path="/apps",
+            source_file="apis/application.yaml",
+            operation_kind="delete",
+        ),
+        user_id="1",
+        user_role="admin",
+        resolved_inputs={"references": {"project_name": "demo", "application_name": "api-demo"}},
+    )
+
+    assert result["success"] is True
+    assert application_client.calls == [
+        ("get_apps_status", {"user_id": "1", "role": "admin", "project_id": 98, "app_name": "api-demo"}),
+        ("get_apps", {"user_id": "1", "role": "admin", "project_id": 98}),
+        ("delete_apps", {"user_id": "1", "role": "admin", "body": {"application_id": 777}}),
+    ]
+
+
+@pytest.mark.anyio
+async def test_project_resolution_returns_similar_name_suggestions() -> None:
+    @dataclass
+    class SuggestingProjectClient(RecordingProjectClient):
+        async def list_projects(self, *, user_id: str, role: str | None) -> dict[str, object]:
+            self.calls.append(("list_projects", {"user_id": user_id, "role": role}))
+            return {
+                "summary": "project.list_projects",
+                "items": [
+                    {"id": 98, "name": "demo-prod"},
+                    {"id": 99, "name": "demo-test"},
+                ],
+            }
+
+    dispatcher = DownstreamDispatcher(
+        project_client=SuggestingProjectClient(),
+        application_client=RecordingApplicationClient(),
+        monitoring_client=RecordingMonitoringClient(),
+    )
+
+    result = await dispatcher.execute_command(
+        _entry(
+            entry_id="project.delete",
+            method="DELETE",
+            path="/projects/{project_id}",
+            source_file="apis/project.yaml",
+            operation_kind="delete",
+        ),
+        user_id="1",
+        user_role="admin",
+        resolved_inputs={"references": {"project_name": "demo"}},
+    )
+
+    assert result["success"] is False
+    assert "demo-prod" in result["summary"]
+    assert "demo-test" in result["summary"]

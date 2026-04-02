@@ -9,6 +9,10 @@ class CreateRequestRequest(BaseModel):
     message: str
 
 
+class ApproveRequestRequest(BaseModel):
+    confirmation_text: str | None = None
+
+
 class RequestResponse(BaseModel):
     request_id: int
     session_id: int

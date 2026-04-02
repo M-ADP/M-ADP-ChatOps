@@ -59,6 +59,13 @@ class ProjectClientImpl:
             headers=self._headers(user_id=user_id, role=role),
         )
         payload = await self._read_json(response)
+        if response.status >= 400:
+            return {
+                "success": False,
+                "summary": self._error_summary(response.status, payload),
+                "data": payload,
+                "status_code": response.status,
+            }
         items = self._extract_items(payload)
         if not items:
             return {"summary": "프로젝트 목록이 없습니다.", "items": []}
@@ -66,6 +73,7 @@ class ProjectClientImpl:
         return {
             "summary": ", ".join(project_names),
             "items": items,
+            "status_code": response.status,
         }
 
     async def get_project(self, *, user_id: str, role: str | None, project_id: int) -> dict[str, Any]:

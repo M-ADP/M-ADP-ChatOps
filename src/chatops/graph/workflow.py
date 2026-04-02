@@ -37,7 +37,18 @@ class GraphWorkflow:
             },
         )
         graph.add_edge("answer_inquiry", END)
-        graph.add_edge("prepare_query", "execute_query")
+        graph.add_conditional_edges(
+            "prepare_query",
+            lambda state: (
+                "execute_query"
+                if state.get("request_status") not in {"failed", "input_required", "ambiguous"}
+                else "complete"
+            ),
+            {
+                "execute_query": "execute_query",
+                "complete": END,
+            },
+        )
         graph.add_edge("execute_query", "interpret_result")
         graph.add_edge("interpret_result", END)
         graph.add_conditional_edges(

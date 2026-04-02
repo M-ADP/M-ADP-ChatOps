@@ -3,8 +3,10 @@ from __future__ import annotations
 import atexit
 from contextlib import ExitStack
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from chatops.common.id_generator import IdGenerator
+from chatops.domain.enums import RequestStatus
 from chatops.graph.nodes import WorkflowNodes
 from chatops.graph.state import GraphState
 from chatops.graph.workflow import GraphWorkflow
@@ -27,6 +29,14 @@ class GraphResult:
     missing_inputs: list[str] | None = None
     effective_message_text: str | None = None
     resolved_references: dict[str, object] | None = None
+    is_ambiguous: bool = False
+    ambiguity_candidates: list[dict[str, object]] | None = None
+    risk_level: str | None = None
+    error_code: str | None = None
+    expires_at: str | None = None
+    clarification_type: str | None = None
+    fallback_used: bool = False
+    execution_audit: dict[str, object] | None = None
 
 
 class GraphService:
@@ -39,9 +49,11 @@ class GraphService:
         resolver_service=None,
         checkpointer=None,
         database_url: str | None = None,
+        approval_ttl_seconds: int = 900,
     ) -> None:
         self._exit_stack = ExitStack()
         self._closed = False
+        self.approval_ttl_seconds = approval_ttl_seconds
         self.checkpointer = checkpointer or self._build_checkpointer(database_url)
         dispatcher = downstream_dispatcher or adapter_service
         if dispatcher is None:
@@ -52,6 +64,7 @@ class GraphService:
                 registry_service=registry_service,
                 downstream_dispatcher=dispatcher,
                 resolver_service=resolver_service or _NullResolverService(),
+                approval_ttl_seconds=approval_ttl_seconds,
             )
         ).compile(checkpointer=self.checkpointer)
         atexit.register(self.close)
@@ -78,6 +91,8 @@ class GraphService:
             "request_status": "created",
             "selected_operation_ids": [],
             "requires_approval": False,
+            "is_ambiguous": False,
+            "ambiguity_candidates": [],
         }
         return self._invoke(initial_state, config=self._thread_config(request_id))
 
@@ -87,7 +102,7 @@ class GraphService:
         session_id: int,
         user_id: str,
         message_text: str,
-        approval_granted: bool = True,
+        approval_granted: bool | str = True,
         user_role: str | None = None,
         org_id: str | None = None,
     ) -> GraphResult:
@@ -131,6 +146,14 @@ class GraphService:
             missing_inputs=list(state.get("missing_inputs", [])) or None,
             effective_message_text=state.get("effective_message_text"),
             resolved_references=self._extract_references(state),
+            is_ambiguous=bool(state.get("is_ambiguous", False)),
+            ambiguity_candidates=state.get("ambiguity_candidates"),
+            risk_level=state.get("risk_level"),
+            error_code=state.get("error_code"),
+            expires_at=state.get("expires_at"),
+            clarification_type=state.get("clarification_type"),
+            fallback_used=bool(state.get("fallback_used", False)),
+            execution_audit=state.get("execution_audit"),
         )
 
     def _extract_references(self, state: dict[str, object]) -> dict[str, object] | None:

@@ -11,7 +11,7 @@ class GraphState(TypedDict, total=False):
     message_text: str
     effective_message_text: str
     session_context: dict[str, Any] | None
-    approval_granted: bool
+    approval_granted: bool | str
     request_type: str
     request_status: str
     requires_approval: bool
@@ -27,3 +27,22 @@ class GraphState(TypedDict, total=False):
     command_result: dict[str, Any] | None
     resolved_references: dict[str, Any] | None
     final_response: str | None
+    # P0: Ambiguity detection
+    is_ambiguous: bool
+    ambiguity_candidates: list[dict[str, Any]]
+    clarification_question: str | None
+    # P0: TTL tracking
+    created_at: str | None
+    expires_at: str | None
+    # P1: Pre-check
+    precheck_passed: bool
+    resolved_ids: dict[str, Any] | None
+    precheck_error: str | None
+    # P1: Risk-level UX
+    risk_level: str | None
+    # P0: Error code for structured error responses
+    error_code: str | None
+    # P2: Structured observability
+    clarification_type: str | None
+    fallback_used: bool
+    execution_audit: dict[str, Any] | None

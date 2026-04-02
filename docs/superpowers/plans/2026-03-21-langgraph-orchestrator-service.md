@@ -6,7 +6,7 @@
 
 **아키텍처:** `apis/*.yaml`과 `ai_registry/*.ai.yaml`을 API capability source로 유지하고, 버전드 FastAPI API를 노출하며, 오케스트레이션 로직은 `chatops` 패키지 아래로 분리한다. 현재 상태와 이벤트 이력은 PostgreSQL에 저장하고, LangGraph + PostgreSQL checkpoint를 사용해 승인 대기와 재개를 처리한다. SSE는 저장된 `request_events`를 그대로 흘려주는 얇은 projection 레이어로 유지한다.
 
-**기술 스택:** Python 3.10+, FastAPI, Pydantic v2, SQLAlchemy 2.x, Alembic, psycopg, LangGraph, langgraph-checkpoint-postgres, httpx, PyYAML, pytest
+**기술 스택:** Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy 2.x, Alembic, psycopg, LangGraph, langgraph-checkpoint-postgres, httpx, PyYAML, pytest
 
 ---
 

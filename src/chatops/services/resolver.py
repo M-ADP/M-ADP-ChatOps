@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 import re
 from typing import Any
 
 from chatops.services.registry import RegistryEntry
+from chatops.services.slots import (
+    ApplicationCreateSlots,
+    ApplicationGithubSlots,
+    MemberMutationSlots,
+    MonitoringTrafficSlots,
+    ProjectCreateSlots,
+    ProjectRenameSlots,
+)
 
 
 KEY_VALUE_PATTERN = re.compile(r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(?P<value>[^\s,}]+)")
@@ -97,6 +106,8 @@ class ParameterResolverService:
         references = self._extract_references(message_text)
         self._apply_session_context(message_text, parsed_pairs, references, session_context)
         self._apply_reference_aliases(operation, parsed_pairs, references)
+        self._apply_time_range_aliases(operation, message_text, parsed_pairs)
+        self._apply_typed_slot_models(operation.id, parsed_pairs, references)
         resolved: dict[str, Any] = {}
 
         path_values = self._resolve_named_fields(operation.required_inputs.get("path", []), parsed_pairs)
@@ -117,6 +128,101 @@ class ParameterResolverService:
             resolved["references"] = references
 
         return resolved
+
+    def _apply_typed_slot_models(
+        self,
+        operation_id: str,
+        pairs: dict[str, Any],
+        references: dict[str, Any],
+    ) -> None:
+        if operation_id == "project.create":
+            slots = ProjectCreateSlots.model_validate(
+                {
+                    "name": pairs.get("name") or references.get("project_name"),
+                    "max_cpu": pairs.get("max_cpu"),
+                    "max_memory": pairs.get("max_memory"),
+                    "max_disk": pairs.get("max_disk"),
+                }
+            )
+            self._assign_if_present(pairs, "name", slots.name)
+            self._assign_if_present(pairs, "max_cpu", slots.max_cpu)
+            self._assign_if_present(pairs, "max_memory", slots.max_memory)
+            self._assign_if_present(pairs, "max_disk", slots.max_disk)
+            return
+
+        if operation_id == "project.update_name":
+            slots = ProjectRenameSlots.model_validate(
+                {
+                    "project_name": references.get("project_name"),
+                    "name": pairs.get("name"),
+                }
+            )
+            self._assign_if_present(references, "project_name", slots.project_name)
+            self._assign_if_present(pairs, "name", slots.name)
+            return
+
+        if operation_id in {"project.add_member", "project.remove_member", "project.transfer_ownership"}:
+            slots = MemberMutationSlots.model_validate(
+                {
+                    "project_name": references.get("project_name"),
+                    "target_nickname": references.get("target_nickname"),
+                }
+            )
+            self._assign_if_present(references, "project_name", slots.project_name)
+            self._assign_if_present(references, "target_nickname", slots.target_nickname)
+            return
+
+        if operation_id == "application.create_apps":
+            slots = ApplicationCreateSlots.model_validate(
+                {
+                    "project_name": references.get("project_name"),
+                    "name": pairs.get("name") or references.get("application_name"),
+                    "cpu": pairs.get("cpu"),
+                    "memory": pairs.get("memory"),
+                    "disk": pairs.get("disk"),
+                    "port": pairs.get("port"),
+                }
+            )
+            self._assign_if_present(references, "project_name", slots.project_name)
+            self._assign_if_present(pairs, "name", slots.name)
+            self._assign_if_present(pairs, "cpu", slots.cpu)
+            self._assign_if_present(pairs, "memory", slots.memory)
+            self._assign_if_present(pairs, "disk", slots.disk)
+            self._assign_if_present(pairs, "port", slots.port)
+            return
+
+        if operation_id == "application.patch_apps_github":
+            slots = ApplicationGithubSlots.model_validate(
+                {
+                    "project_name": references.get("project_name"),
+                    "application_name": references.get("application_name"),
+                    "owner": pairs.get("owner"),
+                    "repository": pairs.get("repository"),
+                    "branch": pairs.get("branch"),
+                }
+            )
+            self._assign_if_present(references, "project_name", slots.project_name)
+            self._assign_if_present(references, "application_name", slots.application_name)
+            self._assign_if_present(pairs, "owner", slots.owner)
+            self._assign_if_present(pairs, "repository", slots.repository)
+            self._assign_if_present(pairs, "branch", slots.branch)
+            return
+
+        if operation_id == "monitoring.get_app_deployment_traffic":
+            slots = MonitoringTrafficSlots.model_validate(
+                {
+                    "project_name": references.get("project_name"),
+                    "application_name": references.get("application_name"),
+                    "start": pairs.get("start"),
+                    "end": pairs.get("end"),
+                }
+            )
+            self._assign_if_present(references, "project_name", slots.project_name)
+            self._assign_if_present(references, "application_name", slots.application_name)
+            if slots.start is not None:
+                pairs["start"] = slots.start.isoformat()
+            if slots.end is not None:
+                pairs["end"] = slots.end.isoformat()
 
     def _extract_pairs(self, message_text: str) -> dict[str, Any]:
         pairs: dict[str, Any] = {}
@@ -289,6 +395,34 @@ class ParameterResolverService:
             if application_name is not None:
                 pairs["app_deployment_name"] = application_name
 
+    def _apply_time_range_aliases(
+        self,
+        operation: RegistryEntry,
+        message_text: str,
+        pairs: dict[str, Any],
+    ) -> None:
+        if operation.id != "monitoring.get_app_deployment_traffic":
+            return
+        time_range = self._extract_time_range(message_text)
+        if not time_range:
+            return
+        pairs.update(time_range)
+
+    def _extract_time_range(self, message_text: str) -> dict[str, str]:
+        normalized = message_text.strip()
+        kst = timezone(timedelta(hours=9))
+        now = datetime.now(kst)
+        if "최근 1시간" in normalized or "지난 1시간" in normalized:
+            start = now - timedelta(hours=1)
+            return {"start": start.isoformat(), "end": now.isoformat()}
+        if "최근 30분" in normalized or "지난 30분" in normalized:
+            start = now - timedelta(minutes=30)
+            return {"start": start.isoformat(), "end": now.isoformat()}
+        if "오늘" in normalized:
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            return {"start": start.isoformat(), "end": now.isoformat()}
+        return {}
+
     def _resolve_named_fields(self, fields: list[dict[str, Any]], parsed_pairs: dict[str, Any]) -> dict[str, Any]:
         resolved: dict[str, Any] = {}
         for field in fields:
@@ -311,6 +445,11 @@ class ParameterResolverService:
             if field_name in parsed_pairs:
                 resolved[field_name] = parsed_pairs[field_name]
         return resolved
+
+    @staticmethod
+    def _assign_if_present(container: dict[str, Any], key: str, value: Any) -> None:
+        if value is not None:
+            container[key] = value
 
     def _coerce(self, value: str) -> Any:
         stripped = value.strip().strip("\"'")

@@ -44,7 +44,12 @@ def get_session_factory() -> sessionmaker[Session]:
 @lru_cache(maxsize=1)
 def get_registry_service() -> RegistryService:
     root = Path(__file__).resolve().parents[3] / "ai_registry"
-    return RegistryService.from_directory(root)
+    app_settings = get_app_settings()
+    return RegistryService.from_directory(
+        root,
+        minimum_score_threshold=app_settings.minimum_score_threshold,
+        ambiguity_score_threshold=app_settings.ambiguity_score_threshold,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -70,12 +75,14 @@ def get_downstream_dispatcher() -> DownstreamDispatcher:
 
 @lru_cache(maxsize=1)
 def get_graph_service() -> GraphService:
+    app_settings = get_app_settings()
     return GraphService(
         llm_service=get_llm_service(),
         registry_service=get_registry_service(),
         downstream_dispatcher=get_downstream_dispatcher(),
         resolver_service=ParameterResolverService(),
         database_url=get_database_settings().url,
+        approval_ttl_seconds=app_settings.approval_ttl_seconds,
     )
 
 

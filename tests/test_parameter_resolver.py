@@ -103,6 +103,57 @@ def test_resolve_monitoring_path_from_message() -> None:
     }
 
 
+def test_resolve_monitoring_time_range_from_natural_language() -> None:
+    entry = RegistryEntry(
+        id="monitoring.get_app_deployment_traffic",
+        source_file="apis/monitoring.yaml",
+        operation_id="get_app_deployment_traffic",
+        path="/monitoring/app-deployment/{project_id}/{app_deployment_name}",
+        method="GET",
+        summary="트래픽 조회",
+        capability="트래픽 조회",
+        usable_in=("query",),
+        operation_kind="read",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=False,
+        risk_level="low",
+        side_effects=(),
+        required_headers=("X-User-Id",),
+        required_inputs={
+            "headers": [],
+            "path": [
+                {"name": "project_id", "required": True},
+                {"name": "app_deployment_name", "required": True},
+            ],
+            "query": [
+                {"name": "start", "required": False},
+                {"name": "end", "required": False},
+            ],
+            "body": None,
+        },
+        preconditions=(),
+        missing_info_questions=(),
+        response_interpretation="트래픽 결과",
+        plan_template=(),
+        examples=(),
+    )
+
+    resolved = ParameterResolverService().resolve(
+        entry,
+        "demo 프로젝트 api-server 앱 최근 1시간 트래픽 보여줘",
+    )
+
+    assert resolved["path"]["app_deployment_name"] == "api-server"
+    assert resolved["references"] == {
+        "project_name": "demo",
+        "application_name": "api-server",
+    }
+    assert "start" in resolved["query"]
+    assert "end" in resolved["query"]
+    assert resolved["query"]["start"] < resolved["query"]["end"]
+
+
 def test_resolve_project_name_from_natural_language_message() -> None:
     entry = RegistryEntry(
         id="project.create",

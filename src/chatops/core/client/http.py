@@ -30,7 +30,8 @@ class HttpClient(Protocol):
     async def delete(
         self,
         path: str,
+        data: Any = None,
+        json: Any = None,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
     ) -> Any: ...
-

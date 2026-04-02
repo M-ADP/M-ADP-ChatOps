@@ -41,6 +41,7 @@ class RequestRecord(Base):
     missing_inputs: Mapped[str | None] = mapped_column(Text(), nullable=True)
     final_response: Mapped[str | None] = mapped_column(Text(), nullable=True)
     resolved_references: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    superseded_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

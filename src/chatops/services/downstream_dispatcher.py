@@ -25,11 +25,32 @@ class DownstreamDispatcher:
         resolved_inputs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         del org_id
+        resolved_inputs = resolved_inputs or {}
         handler = self._query_handler(operation.id)
         try:
-            return await handler(user_id, user_role, resolved_inputs or {})
+            result = await handler(user_id, user_role, resolved_inputs)
         except EntityResolutionError as exc:
-            return {"summary": exc.summary}
+            return {
+                "success": False,
+                "summary": exc.summary,
+                "status_code": 404,
+                "fallback_used": self._fallback_used(resolved_inputs),
+            }
+        fallback_used = bool(result.get("fallback_used", False) or self._fallback_used(resolved_inputs))
+        if result.get("success") is False:
+            if fallback_used and "fallback_used" not in result:
+                return {**result, "fallback_used": True}
+            return result
+        if int(result.get("status_code", 200)) >= 400:
+            return {
+                "success": False,
+                "summary": str(result.get("summary", operation.id)),
+                "status_code": int(result.get("status_code", 500)),
+                "fallback_used": fallback_used,
+            }
+        if fallback_used:
+            return {**result, "fallback_used": True}
+        return result
 
     async def execute_command(
         self,
@@ -40,29 +61,38 @@ class DownstreamDispatcher:
         resolved_inputs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         del org_id
+        resolved_inputs = resolved_inputs or {}
         handler = self._command_handler(operation.id)
         try:
-            result = await handler(user_id, user_role, resolved_inputs or {})
+            result = await handler(user_id, user_role, resolved_inputs)
         except EntityResolutionError as exc:
             return {
                 "success": False,
                 "summary": exc.summary,
                 "status_code": 404,
+                "fallback_used": self._fallback_used(resolved_inputs),
             }
+        fallback_used = bool(result.get("fallback_used", False) or self._fallback_used(resolved_inputs))
         if result.get("success") is False:
+            if fallback_used and "fallback_used" not in result:
+                return {**result, "fallback_used": True}
             return result
         if int(result.get("status_code", 200)) >= 400:
             return {
                 "success": False,
                 "summary": str(result.get("summary", operation.id)),
                 "status_code": int(result.get("status_code", 500)),
+                "fallback_used": fallback_used,
             }
         summary = result.get("summary", operation.id)
-        return {
+        response = {
             "success": True,
             "summary": summary,
             "result": result,
         }
+        if fallback_used:
+            response["fallback_used"] = True
+        return response
 
     def _query_handler(self, operation_id: str) -> AsyncHandler:
         handlers: dict[str, AsyncHandler] = {
@@ -419,13 +449,20 @@ class DownstreamDispatcher:
             path_values.get("app_deployment_name")
             or resolved_inputs.get("references", {}).get("application_name")
         )
+        query_values = resolved_inputs.get("query", {})
         if not application_name:
             raise EntityResolutionError("대상 앱 이름을 찾지 못했습니다.")
+        monitoring_kwargs: dict[str, Any] = {}
+        if query_values.get("start"):
+            monitoring_kwargs["start"] = str(query_values["start"])
+        if query_values.get("end"):
+            monitoring_kwargs["end"] = str(query_values["end"])
         return await self.monitoring_client.get_app_deployment_traffic(
             user_id=user_id,
             role=user_role,
             project_id=project_id,
             app_deployment_name=str(application_name),
+            **monitoring_kwargs,
         )
 
     async def _get_apps_status(
@@ -442,11 +479,18 @@ class DownstreamDispatcher:
         application_name = resolved_inputs.get("references", {}).get("application_name")
         if not application_name:
             raise EntityResolutionError("대상 앱을 찾지 못했습니다.")
-        return await self.application_client.get_apps_status(
+        result = await self.application_client.get_apps_status(
             user_id=user_id,
             role=user_role,
             project_id=project_id,
             app_name=str(application_name),
+        )
+        return await self._apply_application_query_fallback(
+            result=result,
+            user_id=user_id,
+            user_role=user_role,
+            project_id=project_id,
+            application_name=str(application_name),
         )
 
     async def _get_apps_logs(
@@ -463,11 +507,18 @@ class DownstreamDispatcher:
         application_name = resolved_inputs.get("references", {}).get("application_name")
         if not application_name:
             raise EntityResolutionError("대상 앱을 찾지 못했습니다.")
-        return await self.application_client.get_apps_logs(
+        result = await self.application_client.get_apps_logs(
             user_id=user_id,
             role=user_role,
             project_id=project_id,
             app_name=str(application_name),
+        )
+        return await self._apply_application_query_fallback(
+            result=result,
+            user_id=user_id,
+            user_role=user_role,
+            project_id=project_id,
+            application_name=str(application_name),
         )
 
     async def _get_apps_details(
@@ -484,11 +535,18 @@ class DownstreamDispatcher:
         application_name = resolved_inputs.get("references", {}).get("application_name")
         if not application_name:
             raise EntityResolutionError("대상 앱을 찾지 못했습니다.")
-        return await self.application_client.get_apps_details(
+        result = await self.application_client.get_apps_details(
             user_id=user_id,
             role=user_role,
             project_id=project_id,
             app_name=str(application_name),
+        )
+        return await self._apply_application_query_fallback(
+            result=result,
+            user_id=user_id,
+            user_role=user_role,
+            project_id=project_id,
+            application_name=str(application_name),
         )
 
     async def _resolve_project_id(
@@ -498,6 +556,9 @@ class DownstreamDispatcher:
         user_role: str | None,
         resolved_inputs: dict[str, Any],
     ) -> int:
+        resolved_ids = resolved_inputs.get("resolved_ids", {})
+        if "project_id" in resolved_ids:
+            return int(resolved_ids["project_id"])
         path_values = resolved_inputs.get("path", {})
         if "project_id" in path_values:
             return int(path_values["project_id"])
@@ -511,6 +572,8 @@ class DownstreamDispatcher:
             raise EntityResolutionError("대상 프로젝트를 찾지 못했습니다.")
 
         projects = await self.project_client.list_projects(user_id=user_id, role=user_role)
+        if projects.get("success") is False:
+            raise EntityResolutionError(str(projects.get("summary", "프로젝트 목록을 조회하지 못했습니다.")))
         items = projects.get("items", [])
         for item in items:
             if not isinstance(item, dict):
@@ -519,7 +582,16 @@ class DownstreamDispatcher:
                 project_id = item.get("id")
                 if project_id is not None:
                     return int(project_id)
-        raise EntityResolutionError(f"프로젝트 '{project_name}'을(를) 찾지 못했습니다.")
+        available_names = [
+            str(item.get("name", ""))
+            for item in items
+            if isinstance(item, dict) and item.get("name") is not None
+        ]
+        similar_names = self._find_similar_names(str(project_name), available_names)
+        message = f"프로젝트 '{project_name}'을(를) 찾지 못했습니다."
+        if similar_names:
+            message += "\n비슷한 프로젝트: " + ", ".join(similar_names)
+        raise EntityResolutionError(message)
 
     async def _resolve_application_id(
         self,
@@ -528,6 +600,9 @@ class DownstreamDispatcher:
         user_role: str | None,
         resolved_inputs: dict[str, Any],
     ) -> int:
+        resolved_ids = resolved_inputs.get("resolved_ids", {})
+        if "application_id" in resolved_ids:
+            return int(resolved_ids["application_id"])
         body_values = resolved_inputs.get("body", {})
         if "application_id" in body_values:
             return int(body_values["application_id"])
@@ -550,6 +625,14 @@ class DownstreamDispatcher:
             app_name=str(application_name),
         )
         if status.get("success") is False:
+            if int(status.get("status_code", 0)) == 404:
+                self._mark_fallback_used(resolved_inputs)
+                return await self._resolve_application_id_from_list(
+                    user_id=user_id,
+                    user_role=user_role,
+                    project_id=project_id,
+                    application_name=str(application_name),
+                )
             raise EntityResolutionError(str(status.get("summary", "대상 앱을 찾지 못했습니다.")))
 
         app_id = status.get("app_id")
@@ -557,7 +640,13 @@ class DownstreamDispatcher:
             data = status["data"]
             app_id = data.get("appId") or data.get("app_id")
         if app_id is None:
-            raise EntityResolutionError(f"앱 '{application_name}'을(를) 찾지 못했습니다.")
+            self._mark_fallback_used(resolved_inputs)
+            return await self._resolve_application_id_from_list(
+                user_id=user_id,
+                user_role=user_role,
+                project_id=project_id,
+                application_name=str(application_name),
+            )
         return int(app_id)
 
     async def _resolve_target_user_id(
@@ -565,6 +654,9 @@ class DownstreamDispatcher:
         *,
         resolved_inputs: dict[str, Any],
     ) -> int:
+        resolved_ids = resolved_inputs.get("resolved_ids", {})
+        if "target_user_id" in resolved_ids:
+            return int(resolved_ids["target_user_id"])
         references = resolved_inputs.get("references", {})
         nickname = references.get("target_nickname")
         if not nickname:
@@ -583,6 +675,115 @@ class DownstreamDispatcher:
         if not isinstance(data, dict) or data.get("id") is None:
             raise EntityResolutionError(f"사용자 '{nickname}'을(를) 찾지 못했습니다.")
         return int(data["id"])
+
+    async def _resolve_application_id_from_list(
+        self,
+        *,
+        user_id: str,
+        user_role: str | None,
+        project_id: int,
+        application_name: str,
+    ) -> int:
+        apps = await self.application_client.get_apps(
+            user_id=user_id,
+            role=user_role,
+            project_id=project_id,
+        )
+        if apps.get("success") is False:
+            raise EntityResolutionError(str(apps.get("summary", "앱 목록을 조회하지 못했습니다.")))
+        items = apps.get("items", [])
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("name")) == application_name:
+                application_id = item.get("id") or item.get("appId") or item.get("app_id")
+                if application_id is not None:
+                    return int(application_id)
+        available_names = [
+            str(item.get("name", ""))
+            for item in items
+            if isinstance(item, dict) and item.get("name") is not None
+        ]
+        similar_names = self._find_similar_names(application_name, available_names)
+        message = f"앱 '{application_name}'을(를) 찾지 못했습니다."
+        if similar_names:
+            message += "\n비슷한 앱: " + ", ".join(similar_names)
+        raise EntityResolutionError(message)
+
+    async def _apply_application_query_fallback(
+        self,
+        *,
+        result: dict[str, Any],
+        user_id: str,
+        user_role: str | None,
+        project_id: int,
+        application_name: str,
+    ) -> dict[str, Any]:
+        if result.get("success") is not False or int(result.get("status_code", 0)) != 404:
+            return result
+        suggestions = await self._get_application_suggestions(
+            user_id=user_id,
+            user_role=user_role,
+            project_id=project_id,
+            application_name=application_name,
+        )
+        if not suggestions:
+            return {**result, "fallback_used": True}
+        summary = str(result.get("summary", "대상 리소스를 찾지 못했습니다."))
+        return {
+            **result,
+            "summary": f"{summary}\n비슷한 앱: {', '.join(suggestions)}",
+            "fallback_used": True,
+        }
+
+    async def _get_application_suggestions(
+        self,
+        *,
+        user_id: str,
+        user_role: str | None,
+        project_id: int,
+        application_name: str,
+    ) -> list[str]:
+        apps = await self.application_client.get_apps(
+            user_id=user_id,
+            role=user_role,
+            project_id=project_id,
+        )
+        if apps.get("success") is False:
+            return []
+        items = apps.get("items", [])
+        available_names = [
+            str(item.get("name", ""))
+            for item in items
+            if isinstance(item, dict) and item.get("name") is not None
+        ]
+        return self._find_similar_names(application_name, available_names)
+
+    @staticmethod
+    def _find_similar_names(target: str, names: list[str], limit: int = 3) -> list[str]:
+        target_lower = target.lower()
+        scored: list[tuple[str, int]] = []
+        for name in names:
+            name_lower = name.lower()
+            if target_lower in name_lower or name_lower in target_lower:
+                scored.append((name, 2))
+                continue
+            common = sum(1 for char in target_lower if char.isalnum() and char in name_lower)
+            if common:
+                scored.append((name, common))
+        scored.sort(key=lambda item: (-item[1], item[0]))
+        return [name for name, _score in scored[:limit]]
+
+    @staticmethod
+    def _mark_fallback_used(resolved_inputs: dict[str, Any]) -> None:
+        audit = resolved_inputs.setdefault("audit", {})
+        if isinstance(audit, dict):
+            audit["fallback_used"] = True
+
+    @staticmethod
+    def _fallback_used(resolved_inputs: dict[str, Any]) -> bool:
+        audit = resolved_inputs.get("audit")
+        return isinstance(audit, dict) and bool(audit.get("fallback_used", False))
 
 
 class EntityResolutionError(ValueError):

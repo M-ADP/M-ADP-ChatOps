@@ -533,6 +533,137 @@ def test_approve_request_resumes_pending_command(client: TestClient) -> None:
     assert response.json()["status"] == "completed"
 
 
+def test_pending_high_risk_request_accepts_exact_name_reply(db_session) -> None:
+    class ExactNameGraphService(StubGraphService):
+        last_approval_granted: bool | str | None = None
+
+        def resume_request(
+            self,
+            request_id: int,
+            session_id: int,
+            user_id: str,
+            message_text: str,
+            approval_granted: bool | str = True,
+            user_role: str | None = None,
+            org_id: str | None = None,
+        ) -> GraphResult:
+            del message_text, user_role, org_id
+            self.last_approval_granted = approval_granted
+            return GraphResult(
+                request_id=request_id,
+                session_id=session_id,
+                user_id=user_id,
+                status="completed",
+                request_type="command",
+                requires_approval=False,
+                intent="execute_command",
+                final_response="명령 실행 완료",
+                selected_operation_ids=["project.delete"],
+                missing_inputs=None,
+            )
+
+    graph_service = ExactNameGraphService()
+    app = create_app()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return graph_service
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+        request = RequestRepository(db_session).create(
+            session_id=session["session_id"],
+            user_id="user-1",
+            message_text="demo 프로젝트 삭제해줘",
+            request_type="command",
+            requires_approval=True,
+        )
+        request.status = "pending_approval"
+        request.final_response = "계속하려면 대상 이름 'demo'을(를) 정확히 입력해주세요."
+        db_session.commit()
+
+        response = client.post(
+            f"/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "demo"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "completed"
+    assert graph_service.last_approval_granted == "demo"
+
+
+def test_correction_supersedes_previous_pending_request_and_blocks_old_approval(db_session) -> None:
+    app = create_app()
+    stub = StubGraphService()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return stub
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        first = client.post(
+            f"/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "프로젝트 생성해줘 name=demo max_cpu=1 max_memory=0.5 max_disk=10"},
+        )
+        assert first.status_code == 202
+        assert first.json()["status"] == "pending_approval"
+
+        second = client.post(
+            f"/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "아니 cpu는 2로 바꿔줘"},
+        )
+        assert second.status_code == 202
+
+        repo = RequestRepository(db_session)
+        first_record = repo.get_for_user(first.json()["request_id"], "user-1")
+        second_record = repo.get_for_user(second.json()["request_id"], "user-1")
+        assert first_record is not None
+        assert second_record is not None
+        assert first_record.status == RequestStatus.SUPERSEDED.value
+        assert first_record.superseded_by == second_record.id
+        assert second_record.status == "pending_approval"
+
+        stale_approval = client.post(
+            f"/sessions/{session['session_id']}/requests/{first_record.id}/approve",
+            headers={"X-User-Id": "user-1"},
+        )
+        fresh_approval = client.post(
+            f"/sessions/{session['session_id']}/requests/{second_record.id}/approve",
+            headers={"X-User-Id": "user-1"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert stale_approval.status_code == 409
+    assert fresh_approval.status_code == 200
+    assert fresh_approval.json()["status"] == "completed"
+
+
 def test_reject_request_emits_rejected_event(client: TestClient) -> None:
     session = client.post(
         "/sessions",

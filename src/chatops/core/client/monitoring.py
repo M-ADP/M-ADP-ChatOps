@@ -11,5 +11,6 @@ class MonitoringClient(Protocol):
         role: str | None,
         project_id: int,
         app_deployment_name: str,
+        start: str | None = None,
+        end: str | None = None,
     ) -> dict[str, Any]: ...
-

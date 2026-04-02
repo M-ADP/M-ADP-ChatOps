@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
+from time import perf_counter
 from typing import Any
 
 from langgraph.types import interrupt
 
 from chatops.domain.enums import RequestStatus
+from chatops.graph.approval_policy import ApprovalPolicyService
+from chatops.graph.command_message_builder import CommandMessageBuilder
+from chatops.graph.command_planner import CommandPlanningService
+from chatops.graph.input_requirement_service import InputRequirementService
+from chatops.graph.interaction_prompt_service import InteractionPromptService
+from chatops.graph.observability_service import AuditObservabilityService
+from chatops.graph.precheck_service import PrecheckService
+from chatops.graph.query_planner import QueryPlanningService
+from chatops.graph.safe_node import safe_node
+from chatops.graph.session_message_service import SessionMessageService
 from chatops.graph.state import GraphState
+from chatops.services.auth import format_missing_auth_headers, missing_auth_headers
+from chatops.services.downstream_dispatcher import EntityResolutionError
 
 
 class WorkflowNodes:
@@ -16,21 +30,68 @@ class WorkflowNodes:
         registry_service: Any,
         downstream_dispatcher: Any,
         resolver_service: Any,
+        approval_ttl_seconds: int = 900,
     ) -> None:
         self.llm_service = llm_service
         self.registry_service = registry_service
         self.downstream_dispatcher = downstream_dispatcher
         self.resolver_service = resolver_service
+        self.approval_ttl_seconds = approval_ttl_seconds
+        self.approval_policy = ApprovalPolicyService()
+        self.command_message_builder = CommandMessageBuilder()
+        self.input_requirement_service = InputRequirementService()
+        self.session_message_service = SessionMessageService()
+        self.interaction_prompt_service = InteractionPromptService(
+            command_message_builder=self.command_message_builder,
+        )
+        self.precheck_service = PrecheckService(
+            downstream_dispatcher=self.downstream_dispatcher,
+        )
+        self.observability_service = AuditObservabilityService()
+        self.query_planner = QueryPlanningService(
+            registry_service=self.registry_service,
+            resolver_service=self.resolver_service,
+            auth_precheck_failure=self._auth_precheck_failure,
+            missing_required_inputs=self.input_requirement_service.missing_required_inputs,
+            ambiguity_question_builder=self.interaction_prompt_service.build_query_ambiguity_question,
+            missing_input_response_builder=self.command_message_builder.format_query_missing_input_response,
+        )
+        self.command_planner = CommandPlanningService(
+            registry_service=self.registry_service,
+            resolver_service=self.resolver_service,
+            auth_precheck_failure=self._auth_precheck_failure,
+            missing_required_inputs=self.input_requirement_service.missing_required_inputs,
+            ambiguity_response_builder=self.interaction_prompt_service.build_command_ambiguity_response,
+            missing_input_response_builder=self.command_message_builder.format_missing_input_response,
+            precheck_service=self.precheck_service,
+            risk_aware_plan_builder=self._build_risk_aware_plan,
+        )
 
     def ingest_request(self, state: GraphState) -> GraphState:
-        effective_message_text = self._effective_message_text(state)
+        effective_message_text = self.session_message_service.effective_message_text(state)
+        now = datetime.now(timezone.utc).isoformat()
         return {
             "request_status": "processing",
             "requires_approval": False,
             "selected_operation_ids": [],
             "effective_message_text": effective_message_text,
+            "is_ambiguous": False,
+            "ambiguity_candidates": [],
+            "clarification_question": None,
+            "precheck_passed": False,
+            "resolved_ids": None,
+            "precheck_error": None,
+            "error_code": None,
+            "clarification_type": None,
+            "fallback_used": False,
+            "execution_audit": None,
+            "created_at": now,
+            "expires_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=self.approval_ttl_seconds)
+            ).isoformat(),
         }
 
+    @safe_node
     def classify_request(self, state: GraphState) -> GraphState:
         classification = self.llm_service.classify(state.get("effective_message_text", state["message_text"]))
         return {
@@ -43,21 +104,37 @@ class WorkflowNodes:
     def route_request(self, state: GraphState) -> GraphState:
         return {"route": state["request_type"]}
 
+    @safe_node
     def answer_inquiry(self, state: GraphState) -> GraphState:
+        supported_operations = self.interaction_prompt_service.build_inquiry_operation_context(
+            state["message_text"],
+            registry_service=self.registry_service,
+        )
         return {
-            "final_response": self.llm_service.answer_inquiry(state["message_text"]),
+            "final_response": self.llm_service.answer_inquiry(
+                state["message_text"],
+                supported_operations=supported_operations,
+            ),
             "request_status": "completed",
             "requires_approval": False,
         }
 
+    @safe_node
     def prepare_query(self, state: GraphState) -> GraphState:
-        candidates = self.registry_service.find_candidates(state.get("effective_message_text", state["message_text"]), usable_in="query")
-        selected = candidates[0] if candidates else None
-        return {
-            "selected_operation_id": selected.id if selected is not None else None,
-            "selected_operation_ids": [candidate.id for candidate in candidates],
-        }
+        prepared = self.query_planner.prepare(state)
+        clarification_type = self.observability_service.derive_clarification_type(prepared)
+        if clarification_type is not None:
+            prepared["clarification_type"] = clarification_type
+            self.observability_service.log_clarification_event(
+                request_id=state.get("request_id"),
+                session_id=state.get("session_id"),
+                user_id=state.get("user_id"),
+                operation_id=prepared.get("selected_operation_id"),
+                clarification_type=clarification_type,
+            )
+        return prepared
 
+    @safe_node
     def execute_query(self, state: GraphState) -> GraphState:
         operation_id = state.get("selected_operation_id")
         operation = self.registry_service.get_entry(operation_id) if operation_id else None
@@ -66,83 +143,120 @@ class WorkflowNodes:
                 "query_result": {"summary": "적절한 조회 API를 찾지 못했습니다."},
             }
 
-        resolved_inputs = self.resolver_service.resolve(
+        resolved_inputs = state.get("resolved_inputs") or self.resolver_service.resolve(
             operation,
             state.get("effective_message_text", state["message_text"]),
             session_context=state.get("session_context"),
         )
+        started_at = perf_counter()
+        query_result = self._run_awaitable(
+            self.downstream_dispatcher.execute_query(
+                operation,
+                state["user_id"],
+                user_role=state.get("user_role"),
+                org_id=state.get("org_id"),
+                resolved_inputs=resolved_inputs,
+            )
+        )
+        audit_payload = self.observability_service.log_downstream_execution(
+            request_id=state.get("request_id"),
+            session_id=state.get("session_id"),
+            user_id=state.get("user_id"),
+            operation_id=operation.id,
+            result=query_result,
+            started_at=started_at,
+            clarification_type=state.get("clarification_type"),
+        )
         return {
             "resolved_inputs": resolved_inputs,
-            "query_result": self._run_awaitable(
-                self.downstream_dispatcher.execute_query(
-                    operation,
-                    state["user_id"],
-                    user_role=state.get("user_role"),
-                    org_id=state.get("org_id"),
-                    resolved_inputs=resolved_inputs,
-                )
-            ),
+            "query_result": query_result,
+            "fallback_used": bool(query_result.get("fallback_used", False)),
+            "execution_audit": audit_payload,
         }
 
+    @safe_node
     def interpret_result(self, state: GraphState) -> GraphState:
         raw_result = state.get("query_result") or {}
-        return {
-            "final_response": self.llm_service.interpret_query_result(
-                state["message_text"],
-                raw_result,
-            ),
-            "request_status": "completed",
-            "requires_approval": False,
-        }
-
-    def plan_command(self, state: GraphState) -> GraphState:
-        effective_message_text = state.get("effective_message_text", state["message_text"])
-        candidates = self.registry_service.find_candidates(effective_message_text, usable_in="command")
-        operation_ids = [candidate.id for candidate in candidates]
-        selected = candidates[0] if candidates else None
-        if selected is None:
+        status_code = int(raw_result.get("status_code", 200))
+        if raw_result.get("success") is False or status_code >= 400:
             return {
-                "selected_operation_id": None,
-                "selected_operation_ids": operation_ids,
-                "final_response": "적절한 명령 API를 찾지 못했습니다.",
+                "final_response": str(raw_result.get("summary", "조회 요청을 처리하지 못했습니다.")),
                 "request_status": RequestStatus.FAILED.value,
                 "requires_approval": False,
             }
-
-        resolved_inputs = self.resolver_service.resolve(
-            selected,
-            effective_message_text,
-            session_context=state.get("session_context"),
-        )
-        missing_inputs = self._missing_required_inputs(selected, resolved_inputs)
-        if missing_inputs:
-            return {
-                "selected_operation_id": selected.id,
-                "selected_operation_ids": operation_ids,
-                "resolved_inputs": resolved_inputs,
-                "missing_inputs": missing_inputs,
-                "final_response": self._format_missing_input_response(selected, missing_inputs),
-                "request_status": RequestStatus.INPUT_REQUIRED.value,
-                "requires_approval": False,
-            }
+        interpreted_target = raw_result.get("result")
+        if not isinstance(interpreted_target, dict):
+            interpreted_target = raw_result
         return {
-            "selected_operation_id": selected.id,
-            "selected_operation_ids": operation_ids,
-            "resolved_inputs": resolved_inputs,
-            "final_response": self._build_command_plan(selected, resolved_inputs),
-            "request_status": RequestStatus.PENDING_APPROVAL.value,
-            "requires_approval": True,
+            "final_response": self.llm_service.interpret_query_result(
+                state["message_text"],
+                interpreted_target,
+            ),
+            "request_status": RequestStatus.COMPLETED.value,
+            "requires_approval": False,
         }
 
+    @safe_node
+    def plan_command(self, state: GraphState) -> GraphState:
+        planned = self.command_planner.prepare(state)
+        clarification_type = self.observability_service.derive_clarification_type(planned)
+        if clarification_type is not None:
+            planned["clarification_type"] = clarification_type
+            self.observability_service.log_clarification_event(
+                request_id=state.get("request_id"),
+                session_id=state.get("session_id"),
+                user_id=state.get("user_id"),
+                operation_id=planned.get("selected_operation_id"),
+                clarification_type=clarification_type,
+            )
+        return planned
+
     def wait_for_approval(self, state: GraphState) -> GraphState:
+        # P0: TTL 만료 확인
+        expires_at_str = state.get("expires_at")
+        if expires_at_str:
+            try:
+                expires_at = datetime.fromisoformat(expires_at_str)
+                if datetime.now(timezone.utc) > expires_at:
+                    return {
+                        "approval_granted": False,
+                        "request_status": RequestStatus.APPROVAL_EXPIRED.value,
+                        "requires_approval": False,
+                        "final_response": "요청이 만료되었습니다. 다시 요청해주세요.",
+                        "error_code": "APPROVAL_EXPIRED",
+                    }
+            except (ValueError, TypeError):
+                pass
+
         approved = interrupt(
             {
                 "request_id": state["request_id"],
                 "session_id": state["session_id"],
                 "plan": state.get("final_response"),
                 "selected_operation_ids": list(state.get("selected_operation_ids", [])),
+                "risk_level": state.get("risk_level"),
             }
         )
+
+        # P1: high risk에서 exact-name confirmation 처리
+        risk_level = state.get("risk_level", "medium")
+        if risk_level == "high" and isinstance(approved, str):
+            expected_payload = self._build_high_risk_confirmation_payload(
+                state.get("selected_operation_id") or "",
+                state.get("resolved_inputs") or {},
+            )
+            if expected_payload and not self._matches_high_risk_confirmation(approved, expected_payload):
+                return {
+                    "approval_granted": False,
+                    "request_status": RequestStatus.REJECTED.value,
+                    "requires_approval": False,
+                    "final_response": (
+                        "입력한 확인값이 대상과 일치하지 않습니다. "
+                        f"다음 값을 정확히 입력해야 합니다: {self._format_high_risk_confirmation_payload(expected_payload)}"
+                    ),
+                }
+            approved = True
+
         return {
             "approval_granted": bool(approved),
             "request_status": "approved" if approved else "rejected",
@@ -150,6 +264,7 @@ class WorkflowNodes:
             "final_response": state.get("final_response") if approved else "알겠습니다. 요청을 취소했습니다. 다른 작업이 필요하시면 말씀해주세요.",
         }
 
+    @safe_node
     def execute_command(self, state: GraphState) -> GraphState:
         operation_id = state.get("selected_operation_id")
         operation = self.registry_service.get_entry(operation_id) if operation_id else None
@@ -165,19 +280,33 @@ class WorkflowNodes:
             state.get("effective_message_text", state["message_text"]),
             session_context=state.get("session_context"),
         )
+
+        started_at = perf_counter()
+        command_result = self._run_awaitable(
+            self.downstream_dispatcher.execute_command(
+                operation,
+                state["user_id"],
+                user_role=state.get("user_role"),
+                org_id=state.get("org_id"),
+                resolved_inputs=resolved_inputs,
+            )
+        )
+        audit_payload = self.observability_service.log_downstream_execution(
+            request_id=state.get("request_id"),
+            session_id=state.get("session_id"),
+            user_id=state.get("user_id"),
+            operation_id=operation.id,
+            result=command_result,
+            started_at=started_at,
+            clarification_type=state.get("clarification_type"),
+        )
         return {
             "resolved_inputs": resolved_inputs,
-            "command_result": self._run_awaitable(
-                self.downstream_dispatcher.execute_command(
-                    operation,
-                    state["user_id"],
-                    user_role=state.get("user_role"),
-                    org_id=state.get("org_id"),
-                    resolved_inputs=resolved_inputs,
-                )
-            ),
+            "command_result": command_result,
             "request_status": RequestStatus.EXECUTING.value,
             "requires_approval": False,
+            "fallback_used": bool(command_result.get("fallback_used", False)),
+            "execution_audit": audit_payload,
         }
 
     def respond_command(self, state: GraphState) -> GraphState:
@@ -186,422 +315,151 @@ class WorkflowNodes:
         operation_id = str(state.get("selected_operation_id") or "")
         if result.get("success") is False:
             return {
-                "final_response": self._build_command_failure_message(operation_id, summary),
+                "final_response": self.command_message_builder.build_command_failure_message(operation_id, summary),
                 "request_status": RequestStatus.FAILED.value,
                 "requires_approval": False,
             }
         return {
-            "final_response": self._build_command_success_message(operation_id, summary),
+            "final_response": self.command_message_builder.build_command_success_message(operation_id, summary),
             "request_status": RequestStatus.COMPLETED.value,
             "requires_approval": False,
         }
 
-    def _missing_required_inputs(self, operation, resolved_inputs: dict[str, Any]) -> list[str]:
-        missing: list[str] = []
-        required_inputs = operation.required_inputs
-        important_inputs = operation.important_inputs or {}
-        path_values = resolved_inputs.get("path", {})
-        query_values = resolved_inputs.get("query", {})
-        body_values = resolved_inputs.get("body", {})
-        references = resolved_inputs.get("references", {})
+    # ──────────────────────────────────────────────────
+    # P1: Pre-check — 대상 엔티티 존재 여부 사전 확인
+    # ──────────────────────────────────────────────────
 
-        for field in required_inputs.get("path", []):
-            field_name = str(field.get("name", ""))
-            if not field.get("required", True) or not field_name:
-                continue
-            if field_name in path_values or self._is_reference_satisfied(field_name, references):
-                continue
-            missing.append(self._to_user_input_field(field_name))
-
-        for field in required_inputs.get("query", []):
-            field_name = str(field.get("name", ""))
-            if not field.get("required", False) or not field_name:
-                continue
-            if field_name in query_values or self._is_reference_satisfied(field_name, references):
-                continue
-            missing.append(self._to_user_input_field(field_name))
-
-        body_spec = required_inputs.get("body")
-        if isinstance(body_spec, dict):
-            for field_name in body_spec.get("required_fields", []):
-                normalized = str(field_name)
-                if normalized in body_values or self._is_reference_satisfied(normalized, references):
-                    continue
-                missing.append(self._to_user_input_field(normalized))
-
-        for field_name in important_inputs.get("path", []):
-            normalized = str(field_name)
-            if normalized in path_values or self._is_reference_satisfied(normalized, references):
-                continue
-            missing.append(self._to_user_input_field(normalized))
-
-        for field_name in important_inputs.get("query", []):
-            normalized = str(field_name)
-            if normalized in query_values or self._is_reference_satisfied(normalized, references):
-                continue
-            missing.append(self._to_user_input_field(normalized))
-
-        for field_name in important_inputs.get("body", []):
-            normalized = str(field_name)
-            if normalized in body_values or self._is_reference_satisfied(normalized, references):
-                continue
-            missing.append(self._to_user_input_field(normalized))
-
-        return list(dict.fromkeys(missing))
-
-    def _effective_message_text(self, state: GraphState) -> str:
-        message_text = state["message_text"]
-        session_context = state.get("session_context") or {}
-        if not self._should_continue_previous_request(message_text, session_context):
-            return message_text
-
-        last_effective_message_text = session_context.get("last_effective_message_text")
-        if isinstance(last_effective_message_text, str) and last_effective_message_text.strip():
-            return f"{last_effective_message_text}\n{message_text}".strip()
-
-        last_message_text = session_context.get("last_message_text")
-        if not isinstance(last_message_text, str) or not last_message_text.strip():
-            return message_text
-        return f"{last_message_text}\n{message_text}".strip()
-
-    def _should_continue_previous_request(self, message_text: str, session_context: dict[str, Any]) -> bool:
-        last_status = session_context.get("last_request_status")
-        if last_status not in (RequestStatus.INPUT_REQUIRED.value, RequestStatus.PENDING_APPROVAL.value):
-            return False
-        if not isinstance(message_text, str) or not message_text.strip():
-            return False
-
-        supplement_markers = (
-            "이름",
-            "프로젝트 이름",
-            "앱 이름",
-            "애플리케이션 이름",
-            "cpu",
-            "max_cpu",
-            "memory",
-            "메모리",
-            "max_memory",
-            "disk",
-            "디스크",
-            "max_disk",
-            "port",
-            "포트",
-            "owner",
-            "repository",
-            "repo",
-            "branch",
-            "브랜치",
-            "깃허브",
-            "github",
-            "=",
-            ":",
-            "그거",
-            "이거",
-            "아까",
-            "방금",
-            "닉네임",
-            "대상 사용자",
-            "멤버",
-            "소유권",
-            # 정정 마커
-            "바꿔",
-            "변경",
-            "수정",
-            "고쳐",
-            "대신",
-            "말고",
-            "로 해",
-            "이 아니라",
-            "가 아니라",
+    def _run_precheck(
+        self,
+        operation,
+        resolved_inputs: dict[str, Any],
+        user_id: str,
+        user_role: str | None,
+    ) -> dict[str, Any]:
+        return self.precheck_service.run(
+            operation=operation,
+            resolved_inputs=resolved_inputs,
+            user_id=user_id,
+            user_role=user_role,
         )
-        return any(marker in message_text for marker in supplement_markers)
 
-    def _format_missing_input_response(self, operation, missing_inputs: list[str]) -> str:
-        labels = [self._format_missing_input_prompt_label(operation.id, field_name) for field_name in missing_inputs]
-        joined_labels = ", ".join(labels)
-        return f"{self._missing_input_intro(operation.id)} 아래 정보가 더 필요합니다. {joined_labels}를 알려주세요."
+    async def _precheck_project(
+        self, user_id: str, user_role: str | None, project_name: str,
+    ) -> dict[str, Any]:
+        return await self.precheck_service._precheck_project(
+            user_id=user_id,
+            user_role=user_role,
+            project_name=project_name,
+        )
 
-    def _format_missing_input_label(self, field_name: str) -> str:
-        labels = {
-            "name": "이름(name)",
-            "project_name": "대상 프로젝트",
-            "application_name": "앱 이름",
-            "application_id": "앱 이름",
-            "appDeploymentId": "앱 이름",
-            "target_nickname": "대상 사용자 닉네임",
-            "cpu": "CPU(cpu)",
-            "max_cpu": "최대 CPU(max_cpu)",
-            "memory": "메모리(memory)",
-            "max_memory": "최대 메모리(max_memory)",
-            "disk": "디스크(disk)",
-            "max_disk": "최대 디스크(max_disk)",
-            "port": "포트(port)",
-            "owner": "GitHub 소유자(owner)",
-            "repository": "저장소 이름(repository)",
-            "branch": "브랜치(branch)",
+    async def _precheck_application(
+        self, user_id: str, user_role: str | None, project_id: int, app_name: str,
+    ) -> dict[str, Any]:
+        return await self.precheck_service._precheck_application(
+            user_id=user_id,
+            user_role=user_role,
+            project_id=project_id,
+            app_name=app_name,
+        )
+
+    async def _precheck_user(self, nickname: str) -> dict[str, Any]:
+        return await self.precheck_service._precheck_user(nickname)
+
+    @staticmethod
+    def _find_similar_names(target: str, names: list[str], limit: int = 3) -> list[str]:
+        return PrecheckService._find_similar_names(target, names, limit)
+
+    @staticmethod
+    def _operation_needs_project(operation_id: str) -> bool:
+        return PrecheckService._operation_needs_project(operation_id)
+
+    @staticmethod
+    def _operation_needs_application(operation_id: str) -> bool:
+        return PrecheckService._operation_needs_application(operation_id)
+
+    @staticmethod
+    def _operation_needs_target_user(operation_id: str) -> bool:
+        return PrecheckService._operation_needs_target_user(operation_id)
+
+    # ──────────────────────────────────────────────────
+    # P1: Risk-level 별 승인 메시지 빌더
+    # ──────────────────────────────────────────────────
+
+    def _build_risk_aware_plan(self, operation, resolved_inputs: dict[str, Any]) -> str:
+        """risk_level에 따라 차등화된 승인 메시지를 생성한다."""
+        risk_level = operation.risk_level
+
+        if risk_level == "high":
+            return self._build_high_risk_plan(operation, resolved_inputs)
+        # medium (default) — 기존 plan 메시지
+        return self.command_message_builder.build_command_plan(operation, resolved_inputs)
+
+    def _build_high_risk_plan(self, operation, resolved_inputs: dict[str, Any]) -> str:
+        plan_detail = self.command_message_builder.build_command_plan(operation, resolved_inputs)
+        return self.approval_policy.build_high_risk_plan(
+            operation_id=operation.id,
+            plan_detail=plan_detail,
+            resolved_inputs=resolved_inputs,
+        )
+
+    def _extract_target_name(self, state: GraphState) -> str | None:
+        """state에서 high-risk 확인을 위한 대상 이름을 추출한다."""
+        resolved_inputs = state.get("resolved_inputs") or {}
+        operation_id = state.get("selected_operation_id") or ""
+        return self._extract_target_name_from_inputs(operation_id, resolved_inputs)
+
+    def _extract_target_name_from_inputs(
+        self, operation_id: str, resolved_inputs: dict[str, Any],
+    ) -> str | None:
+        return self.approval_policy.extract_target_name(
+            operation_id=operation_id,
+            resolved_inputs=resolved_inputs,
+        )
+
+    def _build_high_risk_confirmation_payload(
+        self,
+        operation_id: str,
+        resolved_inputs: dict[str, Any],
+    ) -> dict[str, str]:
+        return self.approval_policy.build_confirmation_payload(
+            operation_id=operation_id,
+            resolved_inputs=resolved_inputs,
+        )
+
+    @staticmethod
+    def _format_high_risk_confirmation_payload(payload: dict[str, str]) -> str:
+        return ApprovalPolicyService().format_confirmation_payload(payload)
+
+    def _matches_high_risk_confirmation(
+        self,
+        approved: str,
+        expected_payload: dict[str, str],
+    ) -> bool:
+        return self.approval_policy.matches_confirmation(approved, expected_payload)
+
+    def _auth_precheck_failure(
+        self,
+        operation,
+        state: GraphState,
+        selected_operation_ids: list[str],
+    ) -> GraphState | None:
+        missing_headers = missing_auth_headers(
+            operation.required_headers,
+            user_id=state.get("user_id"),
+            request_id=None,
+            user_role=state.get("user_role"),
+            org_id=state.get("org_id"),
+        )
+        if not missing_headers:
+            return None
+        return {
+            "selected_operation_id": operation.id,
+            "selected_operation_ids": selected_operation_ids,
+            "final_response": format_missing_auth_headers(missing_headers),
+            "request_status": RequestStatus.FAILED.value,
+            "requires_approval": False,
+            "error_code": "AUTH_CONTEXT_MISSING",
         }
-        return labels.get(field_name, field_name)
-
-    def _format_missing_input_prompt_label(self, operation_id: str, field_name: str) -> str:
-        if operation_id.startswith("application.") and field_name == "name":
-            return "앱 이름"
-        labels = {
-            "name": "프로젝트 이름",
-            "project_name": "대상 프로젝트",
-            "application_name": "앱 이름",
-            "application_id": "앱 이름",
-            "appDeploymentId": "앱 이름",
-            "target_nickname": "대상 사용자 닉네임",
-            "cpu": "CPU",
-            "max_cpu": "최대 CPU",
-            "memory": "메모리",
-            "max_memory": "최대 메모리",
-            "disk": "디스크",
-            "max_disk": "최대 디스크",
-            "port": "포트",
-            "owner": "GitHub 소유자",
-            "repository": "저장소 이름",
-            "branch": "브랜치",
-        }
-        return labels.get(field_name, field_name)
-
-    def _format_missing_input_example(self, field_name: str) -> str:
-        examples = {
-            "name": "name=demo 또는 '이름은 demo야'",
-            "project_name": "'demo 프로젝트' 또는 '대상 프로젝트는 demo야'",
-            "application_name": "'api-server 앱' 또는 '앱 이름은 api-server야'",
-            "application_id": "'api-server 앱' 또는 '앱 이름은 api-server야'",
-            "appDeploymentId": "'api-server 앱' 또는 '앱 이름은 api-server야'",
-            "target_nickname": "'alice 멤버 추가해줘' 또는 '닉네임은 alice야'",
-            "cpu": "cpu=0.5",
-            "max_cpu": "max_cpu=1 또는 'cpu는 1이야'",
-            "memory": "memory=0.5",
-            "max_memory": "max_memory=0.5 또는 '메모리는 0.5야'",
-            "disk": "disk=10",
-            "max_disk": "max_disk=10 또는 '디스크는 10이야'",
-            "port": "port=8080",
-            "owner": "owner=M-ADP 또는 'GitHub 소유자는 M-ADP야'",
-            "repository": "repository=my-repo 또는 '저장소 이름은 my-repo야'",
-            "branch": "branch=main 또는 '브랜치는 main이야'",
-        }
-        return examples.get(field_name, "")
-
-    def _build_command_plan(self, operation, resolved_inputs: dict[str, Any]) -> str:
-        references = resolved_inputs.get("references", {})
-        body_values = resolved_inputs.get("body", {})
-        details: list[str] = []
-
-        if operation.id == "project.create":
-            name = body_values.get("name") or references.get("project_name")
-            if name:
-                details.append(f"프로젝트 이름 {name}")
-            if body_values.get("max_cpu") is not None:
-                details.append(f"최대 CPU {body_values['max_cpu']}")
-            if body_values.get("max_memory") is not None:
-                details.append(f"최대 메모리 {body_values['max_memory']}GB")
-            if body_values.get("max_disk") is not None:
-                details.append(f"최대 디스크 {body_values['max_disk']}GB")
-            return self._compose_plan_message("프로젝트를 생성할게요.", details)
-
-        if operation.id == "project.update_name":
-            if references.get("project_name"):
-                details.append(f"대상 프로젝트 {references['project_name']}")
-            if body_values.get("name"):
-                details.append(f"새 이름 {body_values['name']}")
-            return self._compose_plan_message("프로젝트 이름을 변경할게요.", details)
-
-        if operation.id == "project.delete":
-            if references.get("project_name"):
-                details.append(f"대상 프로젝트 {references['project_name']}")
-            return self._compose_plan_message("프로젝트를 삭제할게요.", details)
-
-        if operation.id == "project.add_member":
-            if references.get("project_name"):
-                details.append(f"대상 프로젝트 {references['project_name']}")
-            if references.get("target_nickname"):
-                details.append(f"추가할 사용자 {references['target_nickname']}")
-            return self._compose_plan_message("프로젝트 멤버를 추가할게요.", details)
-
-        if operation.id == "project.remove_member":
-            if references.get("project_name"):
-                details.append(f"대상 프로젝트 {references['project_name']}")
-            if references.get("target_nickname"):
-                details.append(f"제거할 사용자 {references['target_nickname']}")
-            return self._compose_plan_message("프로젝트 멤버를 제거할게요.", details)
-
-        if operation.id == "project.transfer_ownership":
-            if references.get("project_name"):
-                details.append(f"대상 프로젝트 {references['project_name']}")
-            if references.get("target_nickname"):
-                details.append(f"새 소유자 {references['target_nickname']}")
-            return self._compose_plan_message("프로젝트 소유권을 이전할게요.", details)
-
-        if operation.id == "project.update_resource":
-            if references.get("project_name"):
-                details.append(f"대상 프로젝트 {references['project_name']}")
-            if body_values.get("max_cpu") is not None:
-                details.append(f"최대 CPU {body_values['max_cpu']}")
-            if body_values.get("max_memory") is not None:
-                details.append(f"최대 메모리 {body_values['max_memory']}GB")
-            if body_values.get("max_disk") is not None:
-                details.append(f"최대 디스크 {body_values['max_disk']}GB")
-            return self._compose_plan_message("프로젝트 리소스를 변경할게요.", details)
-
-        if operation.id == "application.create_apps":
-            if references.get("project_name"):
-                details.append(f"대상 프로젝트 {references['project_name']}")
-            app_name = body_values.get("name") or references.get("application_name")
-            if app_name:
-                details.append(f"앱 이름 {app_name}")
-            if body_values.get("cpu") is not None:
-                details.append(f"CPU {body_values['cpu']}")
-            if body_values.get("memory") is not None:
-                details.append(f"메모리 {body_values['memory']}MB")
-            if body_values.get("disk") is not None:
-                details.append(f"디스크 {body_values['disk']}GB")
-            if body_values.get("port") is not None:
-                details.append(f"포트 {body_values['port']}")
-            return self._compose_plan_message("애플리케이션을 생성할게요.", details)
-
-        if operation.id == "application.delete_apps":
-            if references.get("project_name"):
-                details.append(f"대상 프로젝트 {references['project_name']}")
-            if references.get("application_name"):
-                details.append(f"앱 이름 {references['application_name']}")
-            return self._compose_plan_message("애플리케이션을 삭제할게요.", details)
-
-        if operation.id == "application.patch_apps_resources":
-            if references.get("project_name"):
-                details.append(f"대상 프로젝트 {references['project_name']}")
-            if references.get("application_name"):
-                details.append(f"앱 이름 {references['application_name']}")
-            if body_values.get("max_cpu") is not None:
-                details.append(f"최대 CPU {body_values['max_cpu']}")
-            if body_values.get("max_memory") is not None:
-                details.append(f"최대 메모리 {body_values['max_memory']}MB")
-            if body_values.get("max_disk") is not None:
-                details.append(f"최대 디스크 {body_values['max_disk']}GB")
-            return self._compose_plan_message("애플리케이션 자원을 변경할게요.", details)
-
-        if operation.id == "application.patch_apps_github":
-            if references.get("project_name"):
-                details.append(f"대상 프로젝트 {references['project_name']}")
-            if references.get("application_name"):
-                details.append(f"앱 이름 {references['application_name']}")
-            if body_values.get("owner"):
-                details.append(f"GitHub 소유자 {body_values['owner']}")
-            if body_values.get("repository"):
-                details.append(f"저장소 {body_values['repository']}")
-            if body_values.get("branch"):
-                details.append(f"브랜치 {body_values['branch']}")
-            return self._compose_plan_message("애플리케이션 GitHub 연결 정보를 변경할게요.", details)
-
-        capability = operation.capability or operation.summary or "작업"
-        capability = capability.replace("Endpoint", "").strip()
-        details.extend(f"{label} {value}" for label, value in self._user_visible_parameters(resolved_inputs))
-        return self._compose_plan_message(f"{capability} 작업을 진행할게요.", details)
-
-    def _user_visible_parameters(self, resolved_inputs: dict[str, Any]) -> list[tuple[str, Any]]:
-        references = resolved_inputs.get("references", {})
-        body_values = resolved_inputs.get("body", {})
-        query_values = resolved_inputs.get("query", {})
-        visible: list[tuple[str, Any]] = []
-
-        for key, value in references.items():
-            if key == "project_name":
-                visible.append(("프로젝트", value))
-            elif key == "application_name":
-                visible.append(("앱", value))
-            elif key == "target_nickname":
-                visible.append(("대상 사용자", value))
-
-        for key, value in {**query_values, **body_values}.items():
-            if key in {"project_id", "application_id", "appDeploymentId", "app_deployment_name"}:
-                continue
-            if key == "name":
-                visible.append(("이름", value))
-            else:
-                visible.append((key, value))
-        return visible
-
-    def _compose_plan_message(self, action: str, details: list[str]) -> str:
-        if not details:
-            return f"{action} 실행할까요?"
-        return f"{', '.join(details)} 기준으로 {action} 실행할까요?"
-
-    def _missing_input_intro(self, operation_id: str) -> str:
-        intros = {
-            "project.create": "프로젝트를 만들려면",
-            "project.update_name": "프로젝트 이름을 바꾸려면",
-            "project.update_resource": "프로젝트 리소스를 바꾸려면",
-            "project.delete": "프로젝트를 삭제하려면",
-            "project.add_member": "프로젝트 멤버를 추가하려면",
-            "project.remove_member": "프로젝트 멤버를 제거하려면",
-            "project.transfer_ownership": "프로젝트 소유권을 이전하려면",
-            "application.create_apps": "애플리케이션을 만들려면",
-            "application.delete_apps": "애플리케이션을 삭제하려면",
-            "application.patch_apps_resources": "애플리케이션 리소스를 바꾸려면",
-            "application.patch_apps_github": "애플리케이션 GitHub 연결 정보를 바꾸려면",
-        }
-        return intros.get(operation_id, "작업을 진행하려면")
-
-    def _build_command_success_message(self, operation_id: str, summary: str) -> str:
-        messages = {
-            "project.create": "프로젝트를 생성했습니다. 프로젝트 설정을 변경하거나 앱을 추가할 수 있습니다.",
-            "project.update_name": "프로젝트 이름을 변경했습니다.",
-            "project.update_resource": "프로젝트 리소스를 변경했습니다.",
-            "project.delete": "프로젝트를 삭제했습니다.",
-            "project.add_member": "프로젝트 멤버를 추가했습니다.",
-            "project.remove_member": "프로젝트 멤버를 제거했습니다.",
-            "project.transfer_ownership": "프로젝트 소유권을 이전했습니다.",
-            "application.create_apps": "애플리케이션을 생성했습니다. GitHub 연결이나 리소스 설정을 진행할 수 있습니다.",
-            "application.delete_apps": "애플리케이션을 삭제했습니다.",
-            "application.patch_apps_resources": "애플리케이션 자원을 변경했습니다.",
-            "application.patch_apps_github": "애플리케이션 GitHub 연결 정보를 변경했습니다.",
-        }
-        return messages.get(operation_id, f"요청한 작업을 완료했습니다. {summary}")
-
-    def _build_command_failure_message(self, operation_id: str, summary: str) -> str:
-        subjects = {
-            "project.create": "프로젝트 생성",
-            "project.update_name": "프로젝트 이름 변경",
-            "project.update_resource": "프로젝트 리소스 변경",
-            "project.delete": "프로젝트 삭제",
-            "project.add_member": "프로젝트 멤버 추가",
-            "project.remove_member": "프로젝트 멤버 제거",
-            "project.transfer_ownership": "프로젝트 소유권 이전",
-            "application.create_apps": "애플리케이션 생성",
-            "application.delete_apps": "애플리케이션 삭제",
-            "application.patch_apps_resources": "애플리케이션 자원 변경",
-            "application.patch_apps_github": "애플리케이션 GitHub 연결 정보 변경",
-        }
-        subject = subjects.get(operation_id, "요청한 작업")
-        if summary and summary.strip():
-            return f"{subject}에 실패했습니다. {summary} 입력값을 확인하고 다시 시도해주세요."
-        return f"{subject}에 실패했습니다. 입력값을 확인하고 다시 시도해주세요."
-
-    def _is_reference_satisfied(self, field_name: str, references: dict[str, Any]) -> bool:
-        reference_aliases = {
-            "project_id": "project_name",
-            "application_id": "application_name",
-            "appDeploymentId": "application_name",
-            "app_deployment_name": "application_name",
-            "user_id": "target_nickname",
-            "target_user_id": "target_nickname",
-        }
-        alias = reference_aliases.get(field_name)
-        return bool(alias and references.get(alias))
-
-    def _to_user_input_field(self, field_name: str) -> str:
-        aliases = {
-            "project_id": "project_name",
-            "application_id": "application_name",
-            "appDeploymentId": "application_name",
-            "app_deployment_name": "application_name",
-            "user_id": "target_nickname",
-            "target_user_id": "target_nickname",
-        }
-        return aliases.get(field_name, field_name)
 
     def _run_awaitable(self, awaitable):
         try:

@@ -145,27 +145,86 @@ class RegistryEntry:
         )
 
 
+@dataclass(frozen=True)
+class ScoredCandidate:
+    """점수가 매겨진 후보 오퍼레이션."""
+    entry: RegistryEntry
+    score: int
+
+
 class RegistryService:
-    def __init__(self, entries: list[RegistryEntry]) -> None:
+    def __init__(
+        self,
+        entries: list[RegistryEntry],
+        minimum_score_threshold: int = 8,
+        ambiguity_score_threshold: int = 5,
+    ) -> None:
         self.entries = tuple(entries)
         self.entries_by_id = {entry.id: entry for entry in self.entries}
+        self.minimum_score_threshold = minimum_score_threshold
+        self.ambiguity_score_threshold = ambiguity_score_threshold
 
     @classmethod
-    def from_directory(cls, directory: str | Path) -> "RegistryService":
+    def from_directory(
+        cls,
+        directory: str | Path,
+        minimum_score_threshold: int = 8,
+        ambiguity_score_threshold: int = 5,
+    ) -> "RegistryService":
         root = Path(directory)
         entries = [
             RegistryEntry.from_dict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
             for path in sorted(root.glob("*.ai.yaml"))
         ]
-        return cls(entries)
+        return cls(
+            entries,
+            minimum_score_threshold=minimum_score_threshold,
+            ambiguity_score_threshold=ambiguity_score_threshold,
+        )
 
     def find_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[RegistryEntry]:
+        """점수 기준으로 후보를 반환한다. threshold 미달 후보는 제외."""
+        scored = self.find_scored_candidates(user_text, usable_in, limit)
+        return [sc.entry for sc in scored]
+
+    def find_scored_candidates(
+        self, user_text: str, usable_in: str, limit: int = 5,
+    ) -> list[ScoredCandidate]:
+        """P1: threshold 적용 + 점수 포함 후보 반환."""
         filtered = [entry for entry in self.entries if self._matches_mode(entry, usable_in)]
         scored = sorted(
-            filtered,
-            key=lambda entry: (-self._score(entry, user_text), entry.id),
+            [(entry, self._score(entry, user_text)) for entry in filtered],
+            key=lambda pair: (-pair[1], pair[0].id),
         )
-        return scored[:limit]
+        # P1: minimum_score_threshold 미달 후보 제외
+        above_threshold = [
+            ScoredCandidate(entry=entry, score=score)
+            for entry, score in scored
+            if score >= self.minimum_score_threshold
+        ]
+        return above_threshold[:limit]
+
+    def detect_ambiguity(
+        self, scored_candidates: list[ScoredCandidate],
+    ) -> tuple[bool, list[ScoredCandidate]]:
+        """P0: 상위 후보 간 점수 차이가 작으면 모호한 것으로 판단.
+
+        Returns:
+            (is_ambiguous, ambiguous_candidates)
+        """
+        if len(scored_candidates) < 2:
+            return False, []
+        top = scored_candidates[0]
+        second = scored_candidates[1]
+        # 서로 다른 도메인(project vs application 등)이면서 점수 차이가 작은 경우만 모호
+        top_domain = top.entry.id.split(".")[0]
+        second_domain = second.entry.id.split(".")[0]
+        if top_domain == second_domain:
+            return False, []
+        score_gap = top.score - second.score
+        if score_gap <= self.ambiguity_score_threshold:
+            return True, [top, second]
+        return False, []
 
     def get_entry(self, entry_id: str | None) -> RegistryEntry | None:
         if not entry_id:

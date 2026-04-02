@@ -37,8 +37,18 @@ def load_all_configs() -> None:
 
 class LoggedSettings(BaseSettings):
     def model_post_init(self, __context: Any) -> None:
-        fields_info = {name: getattr(self, name) for name in type(self).model_fields}
+        fields_info = {
+            name: self._redact_field(name, getattr(self, name))
+            for name in type(self).model_fields
+        }
         logger.info("[Config Loaded] %s -> %s", self.__class__.__name__, fields_info)
+
+    @staticmethod
+    def _redact_field(name: str, value: Any) -> Any:
+        sensitive_tokens = ("key", "secret", "token", "password", "database_url", "url")
+        if any(token in name.lower() for token in sensitive_tokens):
+            return "***REDACTED***"
+        return value
 
 
 class AppConfig(LoggedSettings):
@@ -52,6 +62,10 @@ class AppConfig(LoggedSettings):
     request_stream_keepalive_seconds: int = 15
     approval_ttl_seconds: int = 900
     downstream_timeout_seconds: int = 10
+    # P0: Ambiguity detection — 상위 2개 후보 점수 차이가 이 값 이하이면 모호
+    ambiguity_score_threshold: int = 5
+    # P1: 최고 점수가 이 값 미만이면 "지원하지 않는 기능" 처리
+    minimum_score_threshold: int = 8
 
 
 class DatabaseConfig(LoggedSettings):

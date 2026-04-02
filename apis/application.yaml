@@ -11,7 +11,21 @@ paths:
       deprecated: false
       description: ''
       tags: []
-      parameters: []
+      parameters:
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          schema:
+            type: string
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          schema:
+            type: string
+            title: X-User-Role
       requestBody:
         content:
           application/json:
@@ -31,15 +45,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    description: ''
-                  data:
-                    type: integer
-                    format: int64
-                    description: 애플리케이션 아이디
+                $ref: '#/components/schemas/ResponseEntityApiResponseDtoLong'
               example:
                 message: ''
                 data: 0
@@ -50,7 +56,21 @@ paths:
       deprecated: false
       description: ''
       tags: []
-      parameters: []
+      parameters:
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          schema:
+            type: string
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          schema:
+            type: string
+            title: X-User-Role
       requestBody:
         content:
           application/json:
@@ -64,8 +84,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties: {}
+                $ref: '#/components/schemas/ResponseEntityApiResponseDtoVoid'
           headers: {}
       security: []
     get:
@@ -80,6 +99,20 @@ paths:
           required: true
           schema:
             type: string
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          schema:
+            type: string
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          schema:
+            type: string
+            title: X-User-Role
       responses:
         '200':
           description: ''
@@ -104,7 +137,21 @@ paths:
       deprecated: false
       description: ''
       tags: []
-      parameters: []
+      parameters:
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          schema:
+            type: string
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          schema:
+            type: string
+            title: X-User-Role
       requestBody:
         content:
           application/json:
@@ -122,8 +169,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties: {}
+                $ref: '#/components/schemas/ResponseEntityApiResponseDtoVoid'
           headers: {}
       security: []
   /apps/resources:
@@ -132,7 +178,21 @@ paths:
       deprecated: false
       description: ''
       tags: []
-      parameters: []
+      parameters:
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          schema:
+            type: string
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          schema:
+            type: string
+            title: X-User-Role
       requestBody:
         content:
           application/json:
@@ -146,8 +206,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties: {}
+                $ref: '#/components/schemas/ResponseEntityApiResponseDtoVoid'
           headers: {}
       security: []
   /apps/logs:
@@ -169,6 +228,20 @@ paths:
           required: true
           schema:
             type: string
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          schema:
+            type: string
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          schema:
+            type: string
+            title: X-User-Role
       responses:
         '200':
           description: ''
@@ -200,6 +273,20 @@ paths:
           required: true
           schema:
             type: string
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          schema:
+            type: string
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          schema:
+            type: string
+            title: X-User-Role
       responses:
         '200':
           description: ''
@@ -240,6 +327,20 @@ paths:
           required: true
           schema:
             type: string
+        - name: X-User-Id
+          in: header
+          description: 사용자 식별자
+          required: true
+          schema:
+            type: string
+            title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          schema:
+            type: string
+            title: X-User-Role
       responses:
         '200':
           description: ''
@@ -271,6 +372,21 @@ components:
           type: integer
           description: ''
           format: int64
+      x-apifox-orders:
+        - message
+        - data
+    ResponseEntityApiResponseDtoVoid:
+      type: object
+      properties:
+        message:
+          type: string
+          description: ''
+        data:
+          anyOf:
+            - type: object
+              additionalProperties: true
+            - type: 'null'
+          description: ''
       x-apifox-orders:
         - message
         - data

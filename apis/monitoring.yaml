@@ -55,8 +55,15 @@ paths:
           required: true
           example: 0
           schema:
-            type: integer
+            type: string
             title: X-User-Id
+        - name: X-User-Role
+          in: header
+          description: 사용자 역할
+          required: true
+          schema:
+            type: string
+            title: X-User-Role
       responses:
         '200':
           description: Successful Response

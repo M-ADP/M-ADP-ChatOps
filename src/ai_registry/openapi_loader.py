@@ -27,6 +27,7 @@ def normalize_operation_slug(
     method: str,
 ) -> str:
     base = (operation_id or "").strip().lower()
+    base_from_operation_id = bool(base)
     method_lower = method.lower()
 
     if base:
@@ -34,11 +35,14 @@ def normalize_operation_slug(
         base = re.sub(rf"_{method_lower}$", "", base)
         base = re.sub(r"_+", "_", base).strip("_")
     else:
-        segments = [
-            segment.strip("{}").replace("-", "_")
-            for segment in path.split("/")
-            if segment and not segment.startswith("{")
-        ]
+        segments: list[str] = []
+        for segment in path.split("/"):
+            if not segment:
+                continue
+            if segment.startswith("{") and segment.endswith("}"):
+                segments.append(f"by_{segment.strip('{}').replace('-', '_')}")
+                continue
+            segments.append(segment.strip("{}").replace("-", "_"))
         if method_lower == "get":
             base = "get_" + "_".join(segments or [source_stem])
         elif method_lower == "post":
@@ -49,7 +53,7 @@ def normalize_operation_slug(
             base = f"{method_lower}_" + "_".join(segments or [source_stem])
 
     tokens = [token for token in base.split("_") if token]
-    if source_stem in tokens[1:]:
+    if base_from_operation_id and source_stem in tokens[1:]:
         source_index = tokens.index(source_stem)
         if source_index == 1:
             tokens = [tokens[0], *tokens[2:]]

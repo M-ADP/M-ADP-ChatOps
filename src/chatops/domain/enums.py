@@ -17,11 +17,26 @@ class RequestStatus(str, Enum):
     CLASSIFYING = "classifying"
     PROCESSING = "processing"
     INPUT_REQUIRED = "input_required"
+    AMBIGUOUS = "ambiguous"
     PENDING_APPROVAL = "pending_approval"
     APPROVED = "approved"
     REJECTED = "rejected"
     APPROVAL_EXPIRED = "approval_expired"
     EXECUTING = "executing"
+    EXECUTED = "executed"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"
+
+    @classmethod
+    def terminal_statuses(cls) -> frozenset["RequestStatus"]:
+        return frozenset({
+            cls.EXECUTED, cls.COMPLETED, cls.FAILED,
+            cls.CANCELLED, cls.REJECTED, cls.APPROVAL_EXPIRED,
+            cls.SUPERSEDED,
+        })
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in self.terminal_statuses()

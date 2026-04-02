@@ -26,6 +26,10 @@ def test_groq_llm_service_classifies_message() -> None:
                                     "intent": "execute_command",
                                     "classification_reason": "실행 요청",
                                     "classification_confidence": 0.97,
+                                    "operation_candidates": ["project.create"],
+                                    "is_ambiguous": False,
+                                    "missing_slots": [],
+                                    "needs_confirmation": True,
                                 }
                             )
                         }
@@ -46,6 +50,8 @@ def test_groq_llm_service_classifies_message() -> None:
 
     assert result["request_type"] == "command"
     assert result["classification_reason"] == "실행 요청"
+    assert result["operation_candidates"] == ["project.create"]
+    assert result["needs_confirmation"] is True
 
 
 def test_groq_llm_service_generates_plain_text() -> None:
@@ -179,3 +185,65 @@ def test_groq_llm_service_falls_back_on_rate_limit_for_query_interpretation() ->
     )
 
     assert result == "demo 프로젝트 멤버 목록:\n- alice(OWNER)"
+
+
+def test_groq_llm_service_hides_internal_operation_ids_in_query_fallback() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"error": {"message": "rate limit"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    service = GroqLLMService(
+        api_key="test-key",
+        model="llama-3.3-70b-versatile",
+        timeout_seconds=10,
+        client=client,
+    )
+
+    result = service.interpret_query_result(
+        "api-server 트래픽 보여줘",
+        {"summary": "monitoring.get_app_deployment_traffic"},
+    )
+
+    assert result == "조회 결과를 확인했습니다."
+
+
+def test_groq_llm_service_rejects_unsupported_inquiry_without_llm_call() -> None:
+    service = GroqLLMService(
+        api_key="test-key",
+        model="llama-3.3-70b-versatile",
+        timeout_seconds=10,
+        client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(500))),
+    )
+
+    result = service.answer_inquiry("프로젝트 백업 방법 알려줘", supported_operations=[])
+
+    assert "지원하지 않는 기능" in result
+
+
+def test_groq_llm_service_grounds_inquiry_fallback_on_registry_context() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"error": {"message": "rate limit"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    service = GroqLLMService(
+        api_key="test-key",
+        model="llama-3.3-70b-versatile",
+        timeout_seconds=10,
+        client=client,
+    )
+
+    result = service.answer_inquiry(
+        "프로젝트 생성 방법 알려줘",
+        supported_operations=[
+            {
+                "id": "project.create",
+                "capability": "프로젝트 생성",
+                "requires_confirmation": True,
+                "important_inputs": ["프로젝트 이름", "최대 CPU", "최대 메모리", "최대 디스크"],
+            }
+        ],
+    )
+
+    assert "프로젝트 생성" in result
+    assert "프로젝트 이름" in result
+    assert "승인" in result

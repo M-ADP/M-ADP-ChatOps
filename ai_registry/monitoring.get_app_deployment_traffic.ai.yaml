@@ -17,11 +17,15 @@ risk_level: low
 side_effects: []
 required_headers:
 - X-User-Id
+- X-User-Role
 required_inputs:
   headers:
   - name: X-User-Id
     required: true
-    type: integer
+    type: string
+  - name: X-User-Role
+    required: true
+    type: string
   path:
   - name: project_id
     required: true
@@ -29,14 +33,22 @@ required_inputs:
   - name: app_deployment_name
     required: true
     type: string
-  query: []
+  query:
+  - name: start
+    required: false
+    type: string
+  - name: end
+    required: false
+    type: string
   body: null
 preconditions:
 - 필수 입력값이 모두 준비되어 있어야 합니다.
 missing_info_questions:
 - X-User-Id 값을 확인해야 합니다.
+- X-User-Role 값을 확인해야 합니다.
 - project_id 값을 확인해야 합니다.
 - app_deployment_name 값을 확인해야 합니다.
+- 필요한 경우 start, end 시간 범위를 확인해야 합니다.
 response_interpretation: 응답 데이터를 현재 상태 요약과 핵심 수치 중심으로 정리합니다.
 plan_template: []
 examples:
