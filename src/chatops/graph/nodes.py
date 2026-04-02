@@ -14,13 +14,18 @@ from chatops.graph.command_planner import CommandPlanningService
 from chatops.graph.input_requirement_service import InputRequirementService
 from chatops.graph.interaction_prompt_service import InteractionPromptService
 from chatops.graph.observability_service import AuditObservabilityService
+from chatops.graph.planner_service import PlannerService
+from chatops.graph.policy_service import PolicyService
 from chatops.graph.precheck_service import PrecheckService
 from chatops.graph.query_planner import QueryPlanningService
 from chatops.graph.safe_node import safe_node
 from chatops.graph.session_message_service import SessionMessageService
+from chatops.graph.specialist_router import SpecialistRouter
 from chatops.graph.state import GraphState
+from chatops.graph.verifier_service import VerifierService
 from chatops.services.auth import format_missing_auth_headers, missing_auth_headers
 from chatops.services.downstream_dispatcher import EntityResolutionError
+from chatops.services.task_snapshot_builder import TaskSnapshotBuilder
 
 
 class WorkflowNodes:
@@ -44,6 +49,16 @@ class WorkflowNodes:
         self.interaction_prompt_service = InteractionPromptService(
             command_message_builder=self.command_message_builder,
         )
+        self.task_snapshot_builder = TaskSnapshotBuilder(
+            command_message_builder=self.command_message_builder,
+        )
+        self.planner_service = PlannerService(
+            llm_service=self.llm_service,
+            registry_service=self.registry_service,
+        )
+        self.specialist_router = SpecialistRouter(registry_service=self.registry_service)
+        self.verifier_service = VerifierService(llm_service=self.llm_service)
+        self.policy_service = PolicyService()
         self.precheck_service = PrecheckService(
             downstream_dispatcher=self.downstream_dispatcher,
         )
@@ -86,6 +101,9 @@ class WorkflowNodes:
             "fallback_used": False,
             "execution_audit": None,
             "created_at": now,
+            "selected_specialist": None,
+            "policy_decision": None,
+            "retry_count": 0,
             "expires_at": (
                 datetime.now(timezone.utc) + timedelta(seconds=self.approval_ttl_seconds)
             ).isoformat(),
@@ -103,6 +121,19 @@ class WorkflowNodes:
 
     def route_request(self, state: GraphState) -> GraphState:
         return {"route": state["request_type"]}
+
+    @safe_node
+    def plan_runtime(self, state: GraphState) -> GraphState:
+        plan_object = self.planner_service.build(
+            message_text=state.get("effective_message_text", state["message_text"]),
+            request_type=state["request_type"],
+        )
+        if not isinstance(plan_object, dict):
+            return {"plan_object": None, "selected_specialist": None}
+        return {
+            "plan_object": plan_object,
+            "selected_specialist": str(plan_object.get("specialist") or ""),
+        }
 
     @safe_node
     def answer_inquiry(self, state: GraphState) -> GraphState:
@@ -132,6 +163,28 @@ class WorkflowNodes:
                 operation_id=prepared.get("selected_operation_id"),
                 clarification_type=clarification_type,
             )
+        selected_operation_id = prepared.get("selected_operation_id")
+        operation = self.registry_service.get_entry(selected_operation_id) if selected_operation_id else None
+        task_snapshot = self.task_snapshot_builder.build(
+            operation=operation,
+            request_status=str(prepared.get("request_status", state.get("request_status", ""))),
+            request_type="query",
+            resolved_inputs=prepared.get("resolved_inputs"),
+            missing_inputs=prepared.get("missing_inputs"),
+            risk_level=prepared.get("risk_level"),
+            clarification_type=prepared.get("clarification_type"),
+            is_ambiguous=bool(prepared.get("is_ambiguous", False)),
+            summary=prepared.get("final_response"),
+        )
+        if task_snapshot is not None:
+            prepared["task_snapshot"] = task_snapshot
+        selected_operation_id = prepared.get("selected_operation_id")
+        specialist = self.specialist_router.for_operation(selected_operation_id)
+        prepared["specialist_result"] = specialist.describe(
+            operation_id=selected_operation_id,
+            resolved_inputs=prepared.get("resolved_inputs"),
+            missing_inputs=prepared.get("missing_inputs"),
+        )
         return prepared
 
     @safe_node
@@ -175,33 +228,116 @@ class WorkflowNodes:
         }
 
     @safe_node
+    def verify_query(self, state: GraphState) -> GraphState:
+        verifier_decision = self.verifier_service.verify(
+            request_type="query",
+            operation_id=state.get("selected_operation_id"),
+            execution_result=state.get("query_result"),
+        )
+        policy_decision = self.policy_service.evaluate(
+            operation_id=state.get("selected_operation_id"),
+            risk_level=state.get("risk_level"),
+            retry_count=int(state.get("retry_count", 0)),
+            superseded=False,
+        )
+        if verifier_decision.get("decision") == "retry" and not policy_decision.get("allow_retry", True):
+            verifier_decision = {
+                **verifier_decision,
+                "decision": "escalate",
+                "follow_up_action": "human_review",
+            }
+        return {
+            "verifier_decision": verifier_decision,
+            "policy_decision": policy_decision,
+        }
+
+    @safe_node
     def interpret_result(self, state: GraphState) -> GraphState:
         raw_result = state.get("query_result") or {}
         status_code = int(raw_result.get("status_code", 200))
+        operation_id = state.get("selected_operation_id")
+        operation = self.registry_service.get_entry(operation_id) if operation_id else None
         if raw_result.get("success") is False or status_code >= 400:
+            final_response = str(raw_result.get("summary", "조회 요청을 처리하지 못했습니다."))
             return {
-                "final_response": str(raw_result.get("summary", "조회 요청을 처리하지 못했습니다.")),
+                "final_response": final_response,
                 "request_status": RequestStatus.FAILED.value,
                 "requires_approval": False,
+                "task_snapshot": self.task_snapshot_builder.build(
+                    operation=operation,
+                    request_status=RequestStatus.FAILED.value,
+                    request_type="query",
+                    resolved_inputs=state.get("resolved_inputs"),
+                    missing_inputs=state.get("missing_inputs"),
+                    risk_level=state.get("risk_level"),
+                    clarification_type=state.get("clarification_type"),
+                    is_ambiguous=bool(state.get("is_ambiguous", False)),
+                    summary=final_response,
+                ),
             }
         interpreted_target = raw_result.get("result")
         if not isinstance(interpreted_target, dict):
             interpreted_target = raw_result
+        final_response = self.llm_service.interpret_query_result(
+            state["message_text"],
+            interpreted_target,
+        )
         return {
-            "final_response": self.llm_service.interpret_query_result(
-                state["message_text"],
-                interpreted_target,
-            ),
+            "final_response": final_response,
             "request_status": RequestStatus.COMPLETED.value,
             "requires_approval": False,
+            "task_snapshot": self.task_snapshot_builder.build(
+                operation=operation,
+                request_status=RequestStatus.COMPLETED.value,
+                request_type="query",
+                resolved_inputs=state.get("resolved_inputs"),
+                missing_inputs=state.get("missing_inputs"),
+                risk_level=state.get("risk_level"),
+                clarification_type=state.get("clarification_type"),
+                is_ambiguous=bool(state.get("is_ambiguous", False)),
+                summary=final_response,
+            ),
         }
 
     @safe_node
     def plan_command(self, state: GraphState) -> GraphState:
         planned = self.command_planner.prepare(state)
+        selected_operation_id = planned.get("selected_operation_id")
+        operation = self.registry_service.get_entry(selected_operation_id) if selected_operation_id else None
+        task_snapshot = self.task_snapshot_builder.build(
+            operation=operation,
+            request_status=str(planned.get("request_status", state.get("request_status", ""))),
+            request_type="command",
+            resolved_inputs=planned.get("resolved_inputs"),
+            missing_inputs=planned.get("missing_inputs"),
+            risk_level=planned.get("risk_level"),
+            clarification_type=planned.get("clarification_type"),
+            is_ambiguous=bool(planned.get("is_ambiguous", False)),
+            summary=planned.get("final_response"),
+        )
+        if task_snapshot is not None:
+            planned["task_snapshot"] = task_snapshot
+        specialist = self.specialist_router.for_operation(selected_operation_id)
+        planned["specialist_result"] = specialist.describe(
+            operation_id=selected_operation_id,
+            resolved_inputs=planned.get("resolved_inputs"),
+            missing_inputs=planned.get("missing_inputs"),
+        )
+        policy_decision = self.policy_service.evaluate(
+            operation_id=selected_operation_id,
+            risk_level=planned.get("risk_level"),
+            retry_count=int(state.get("retry_count", 0)),
+            superseded=False,
+        )
+        planned["policy_decision"] = policy_decision
+        planned["requires_approval"] = bool(
+            planned.get("requires_approval", False) or policy_decision.get("requires_approval", False)
+        )
         clarification_type = self.observability_service.derive_clarification_type(planned)
         if clarification_type is not None:
             planned["clarification_type"] = clarification_type
+            if isinstance(planned.get("task_snapshot"), dict):
+                planned["task_snapshot"]["clarification_type"] = clarification_type
             self.observability_service.log_clarification_event(
                 request_id=state.get("request_id"),
                 session_id=state.get("session_id"),
@@ -212,18 +348,32 @@ class WorkflowNodes:
         return planned
 
     def wait_for_approval(self, state: GraphState) -> GraphState:
+        operation_id = state.get("selected_operation_id")
+        operation = self.registry_service.get_entry(operation_id) if operation_id else None
         # P0: TTL 만료 확인
         expires_at_str = state.get("expires_at")
         if expires_at_str:
             try:
                 expires_at = datetime.fromisoformat(expires_at_str)
                 if datetime.now(timezone.utc) > expires_at:
+                    final_response = "요청이 만료되었습니다. 다시 요청해주세요."
                     return {
                         "approval_granted": False,
                         "request_status": RequestStatus.APPROVAL_EXPIRED.value,
                         "requires_approval": False,
-                        "final_response": "요청이 만료되었습니다. 다시 요청해주세요.",
+                        "final_response": final_response,
                         "error_code": "APPROVAL_EXPIRED",
+                        "task_snapshot": self.task_snapshot_builder.build(
+                            operation=operation,
+                            request_status=RequestStatus.APPROVAL_EXPIRED.value,
+                            request_type=state.get("request_type"),
+                            resolved_inputs=state.get("resolved_inputs"),
+                            missing_inputs=state.get("missing_inputs"),
+                            risk_level=state.get("risk_level"),
+                            clarification_type=state.get("clarification_type"),
+                            is_ambiguous=bool(state.get("is_ambiguous", False)),
+                            summary=final_response,
+                        ),
                     }
             except (ValueError, TypeError):
                 pass
@@ -246,22 +396,50 @@ class WorkflowNodes:
                 state.get("resolved_inputs") or {},
             )
             if expected_payload and not self._matches_high_risk_confirmation(approved, expected_payload):
+                final_response = (
+                    "입력한 확인값이 대상과 일치하지 않습니다. "
+                    f"다음 값을 정확히 입력해야 합니다: {self._format_high_risk_confirmation_payload(expected_payload)}"
+                )
                 return {
                     "approval_granted": False,
                     "request_status": RequestStatus.REJECTED.value,
                     "requires_approval": False,
-                    "final_response": (
-                        "입력한 확인값이 대상과 일치하지 않습니다. "
-                        f"다음 값을 정확히 입력해야 합니다: {self._format_high_risk_confirmation_payload(expected_payload)}"
+                    "final_response": final_response,
+                    "task_snapshot": self.task_snapshot_builder.build(
+                        operation=operation,
+                        request_status=RequestStatus.REJECTED.value,
+                        request_type=state.get("request_type"),
+                        resolved_inputs=state.get("resolved_inputs"),
+                        missing_inputs=state.get("missing_inputs"),
+                        risk_level=state.get("risk_level"),
+                        clarification_type=state.get("clarification_type"),
+                        is_ambiguous=bool(state.get("is_ambiguous", False)),
+                        summary=final_response,
                     ),
                 }
             approved = True
 
+        final_response = (
+            state.get("final_response")
+            if approved
+            else "알겠습니다. 요청을 취소했습니다. 다른 작업이 필요하시면 말씀해주세요."
+        )
         return {
             "approval_granted": bool(approved),
             "request_status": "approved" if approved else "rejected",
             "requires_approval": False,
-            "final_response": state.get("final_response") if approved else "알겠습니다. 요청을 취소했습니다. 다른 작업이 필요하시면 말씀해주세요.",
+            "final_response": final_response,
+            "task_snapshot": self.task_snapshot_builder.build(
+                operation=operation,
+                request_status="approved" if approved else "rejected",
+                request_type=state.get("request_type"),
+                resolved_inputs=state.get("resolved_inputs"),
+                missing_inputs=state.get("missing_inputs"),
+                risk_level=state.get("risk_level"),
+                clarification_type=state.get("clarification_type"),
+                is_ambiguous=bool(state.get("is_ambiguous", False)),
+                summary=final_response,
+            ),
         }
 
     @safe_node
@@ -307,22 +485,85 @@ class WorkflowNodes:
             "requires_approval": False,
             "fallback_used": bool(command_result.get("fallback_used", False)),
             "execution_audit": audit_payload,
+            "task_snapshot": self.task_snapshot_builder.build(
+                operation=operation,
+                request_status=RequestStatus.EXECUTING.value,
+                request_type=state.get("request_type"),
+                resolved_inputs=resolved_inputs,
+                missing_inputs=state.get("missing_inputs"),
+                risk_level=state.get("risk_level"),
+                clarification_type=state.get("clarification_type"),
+                is_ambiguous=bool(state.get("is_ambiguous", False)),
+                summary=state.get("final_response"),
+            ),
+        }
+
+    @safe_node
+    def verify_command(self, state: GraphState) -> GraphState:
+        retry_count = int(state.get("retry_count", 0))
+        verifier_decision = self.verifier_service.verify(
+            request_type="command",
+            operation_id=state.get("selected_operation_id"),
+            execution_result=state.get("command_result"),
+        )
+        policy_decision = self.policy_service.evaluate(
+            operation_id=state.get("selected_operation_id"),
+            risk_level=state.get("risk_level"),
+            retry_count=retry_count,
+            superseded=False,
+        )
+        next_retry_count = retry_count + 1 if verifier_decision.get("decision") == "retry" else retry_count
+        if verifier_decision.get("decision") == "retry" and not policy_decision.get("allow_retry", True):
+            verifier_decision = {
+                **verifier_decision,
+                "decision": "escalate",
+                "follow_up_action": "human_review",
+            }
+        return {
+            "verifier_decision": verifier_decision,
+            "policy_decision": policy_decision,
+            "retry_count": next_retry_count,
         }
 
     def respond_command(self, state: GraphState) -> GraphState:
         result = state.get("command_result") or {}
         summary = str(result.get("summary", "명령 실행 결과가 없습니다."))
         operation_id = str(state.get("selected_operation_id") or "")
+        operation = self.registry_service.get_entry(operation_id) if operation_id else None
         if result.get("success") is False:
+            final_response = self.command_message_builder.build_command_failure_message(operation_id, summary)
             return {
-                "final_response": self.command_message_builder.build_command_failure_message(operation_id, summary),
+                "final_response": final_response,
                 "request_status": RequestStatus.FAILED.value,
                 "requires_approval": False,
+                "task_snapshot": self.task_snapshot_builder.build(
+                    operation=operation,
+                    request_status=RequestStatus.FAILED.value,
+                    request_type=state.get("request_type"),
+                    resolved_inputs=state.get("resolved_inputs"),
+                    missing_inputs=state.get("missing_inputs"),
+                    risk_level=state.get("risk_level"),
+                    clarification_type=state.get("clarification_type"),
+                    is_ambiguous=bool(state.get("is_ambiguous", False)),
+                    summary=final_response,
+                ),
             }
+        final_response = self.command_message_builder.build_command_success_message(operation_id, summary)
         return {
-            "final_response": self.command_message_builder.build_command_success_message(operation_id, summary),
+            "final_response": final_response,
             "request_status": RequestStatus.COMPLETED.value,
             "requires_approval": False,
+            "task_snapshot": self.task_snapshot_builder.build(
+                operation=operation,
+                request_status=RequestStatus.COMPLETED.value,
+                request_type=state.get("request_type"),
+                resolved_inputs=state.get("resolved_inputs"),
+                missing_inputs=state.get("missing_inputs"),
+                risk_level=state.get("risk_level"),
+                clarification_type=state.get("clarification_type"),
+                is_ambiguous=bool(state.get("is_ambiguous", False)),
+                summary=final_response,
+            ),
         }
 
     # ──────────────────────────────────────────────────
@@ -446,9 +687,7 @@ class WorkflowNodes:
         missing_headers = missing_auth_headers(
             operation.required_headers,
             user_id=state.get("user_id"),
-            request_id=None,
             user_role=state.get("user_role"),
-            org_id=state.get("org_id"),
         )
         if not missing_headers:
             return None

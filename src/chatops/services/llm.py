@@ -40,6 +40,15 @@ class LLMService(Protocol):
 
     def plan_command(self, message_text: str, operation_ids: list[str]) -> str: ...
 
+    def build_plan_object(
+        self,
+        message_text: str,
+        request_type: str,
+        candidate_operation_ids: list[str],
+    ) -> dict[str, Any]: ...
+
+    def verify_execution(self, execution_result: dict[str, Any]) -> dict[str, Any]: ...
+
 
 class GroqLLMService:
     def __init__(
@@ -148,6 +157,69 @@ class GroqLLMService:
             )
         except httpx.HTTPError:
             return self._fallback_command_plan(operation_ids)
+
+    def build_plan_object(
+        self,
+        message_text: str,
+        request_type: str,
+        candidate_operation_ids: list[str],
+    ) -> dict[str, Any]:
+        try:
+            content = self._chat_completion(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "당신은 ChatOps planner다. 사용자 목표를 구조화된 JSON plan object로만 반환한다. "
+                            "키는 goal, specialist, entities, constraints, candidate_steps, risk_level, required_clarifications 를 사용한다."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"사용자 요청: {message_text}\n"
+                            f"request_type: {request_type}\n"
+                            f"candidate_operation_ids: {', '.join(candidate_operation_ids)}"
+                        ),
+                    },
+                ],
+                response_format={"type": "json_object"},
+            )
+            parsed = json.loads(content)
+            if not isinstance(parsed, dict):
+                raise ValueError("plan object must be a JSON object")
+            return parsed
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError):
+            return self._fallback_plan_object(
+                message_text=message_text,
+                request_type=request_type,
+                candidate_operation_ids=candidate_operation_ids,
+            )
+
+    def verify_execution(self, execution_result: dict[str, Any]) -> dict[str, Any]:
+        try:
+            content = self._chat_completion(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "당신은 ChatOps verifier다. 실행 결과를 보고 success, retry, clarify, escalate, stop 중 하나를 고른다. "
+                            "JSON 객체만 반환하고 키는 decision, summary, missing_inputs, follow_up_action 을 사용한다."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"execution_result: {json.dumps(execution_result, ensure_ascii=False)}",
+                    },
+                ],
+                response_format={"type": "json_object"},
+            )
+            parsed = json.loads(content)
+            if not isinstance(parsed, dict):
+                raise ValueError("verifier decision must be a JSON object")
+            return parsed
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError):
+            return self._fallback_verifier_decision(execution_result)
 
     def _chat_completion(
         self,
@@ -258,6 +330,69 @@ class GroqLLMService:
     def _fallback_command_plan(self, operation_ids: list[str]) -> str:
         target = operation_ids[0] if operation_ids else "작업"
         return f"실행 계획\n- 요청한 작업({target})을 진행합니다.\n실행할까요?"
+
+    def _fallback_plan_object(
+        self,
+        *,
+        message_text: str,
+        request_type: str,
+        candidate_operation_ids: list[str],
+    ) -> dict[str, Any]:
+        operation_id = candidate_operation_ids[0] if candidate_operation_ids else f"{request_type}.unknown"
+        specialist = operation_id.split(".", 1)[0]
+        return {
+            "goal": message_text,
+            "specialist": specialist,
+            "entities": {},
+            "constraints": {"approval_required": request_type == "command"},
+            "candidate_steps": [
+                {
+                    "step_id": "primary-operation",
+                    "title": "주요 작업 실행",
+                    "status": "planned",
+                    "operation_id": operation_id,
+                }
+            ],
+            "risk_level": "medium" if request_type == "command" else "low",
+            "required_clarifications": [],
+        }
+
+    def _fallback_verifier_decision(self, execution_result: dict[str, Any]) -> dict[str, Any]:
+        status_code = int(execution_result.get("status_code", 200))
+        if execution_result.get("success") is False:
+            if status_code >= 500:
+                return {
+                    "decision": "retry",
+                    "summary": str(execution_result.get("summary", "일시적 오류가 발생했습니다.")),
+                    "missing_inputs": [],
+                    "follow_up_action": "retry",
+                }
+            if status_code in {400, 404, 409, 422}:
+                return {
+                    "decision": "clarify",
+                    "summary": str(execution_result.get("summary", "추가 입력이 필요합니다.")),
+                    "missing_inputs": [],
+                    "follow_up_action": "fill_inputs",
+                }
+            if status_code in {401, 403}:
+                return {
+                    "decision": "escalate",
+                    "summary": str(execution_result.get("summary", "권한 확인이 필요합니다.")),
+                    "missing_inputs": [],
+                    "follow_up_action": "human_review",
+                }
+            return {
+                "decision": "stop",
+                "summary": str(execution_result.get("summary", "요청을 종료합니다.")),
+                "missing_inputs": [],
+                "follow_up_action": "stop",
+            }
+        return {
+            "decision": "success",
+            "summary": str(execution_result.get("summary", "실행 결과를 확인했습니다.")),
+            "missing_inputs": [],
+            "follow_up_action": "complete",
+        }
 
     def _format_inquiry_context(self, supported_operations: list[dict[str, Any]] | None) -> str:
         if not supported_operations:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from dataclasses import dataclass
 
@@ -23,6 +24,7 @@ from chatops.schemas.requests import (
     RejectRequestResponse,
     RequestResponse,
 )
+from chatops.schemas.tasks import TaskSnapshot
 from chatops.services.auth import build_auth_context
 
 
@@ -34,6 +36,12 @@ class StubGraphService:
     last_session_context: dict[str, object] | None = None
     effective_message_text: str | None = None
     next_request_id: int = 2001
+    task_snapshot: dict[str, object] | None = None
+    resumed_task_snapshot: dict[str, object] | None = None
+    plan_object: dict[str, object] | None = None
+    verifier_decision: dict[str, object] | None = None
+    specialist_result: dict[str, object] | None = None
+    session_summary: dict[str, object] | None = None
 
     def handle_request(
         self,
@@ -59,6 +67,11 @@ class StubGraphService:
             selected_operation_ids=["project.create"],
             missing_inputs=self.missing_inputs,
             effective_message_text=self.effective_message_text,
+            task_snapshot=self.task_snapshot,
+            plan_object=self.plan_object,
+            verifier_decision=self.verifier_decision,
+            specialist_result=self.specialist_result,
+            session_summary=self.session_summary,
         )
 
     def resume_request(
@@ -83,6 +96,11 @@ class StubGraphService:
             selected_operation_ids=["project.create"],
             missing_inputs=None,
             effective_message_text=self.effective_message_text,
+            task_snapshot=self.resumed_task_snapshot or self.task_snapshot,
+            plan_object=self.plan_object,
+            verifier_decision=self.verifier_decision,
+            specialist_result=self.specialist_result,
+            session_summary=self.session_summary,
         )
 
 
@@ -180,9 +198,7 @@ def test_request_event_repository_rejects_duplicate_sequence(db_session) -> None
 def test_request_schemas_and_auth_context_match_contract() -> None:
     auth = build_auth_context(
         user_id="user-1",
-        request_id="req-header-1",
         user_role="admin",
-        org_id="org-1",
     )
     create_payload = CreateRequestRequest(message="프로젝트 생성해줘")
     request_response = RequestResponse(
@@ -191,9 +207,36 @@ def test_request_schemas_and_auth_context_match_contract() -> None:
         status="processing",
         message=create_payload.message,
         assistant_message="처리 중입니다.",
+        task=TaskSnapshot(
+            title="프로젝트 생성",
+            status="processing",
+            request_type="command",
+            approval_state="not_ready",
+            next_actions=["fill_inputs"],
+        ),
     )
-    approved = ApproveRequestResponse(request_id=2001, status="approved")
-    rejected = RejectRequestResponse(request_id=2001, status="rejected")
+    approved = ApproveRequestResponse(
+        request_id=2001,
+        status="approved",
+        task=TaskSnapshot(
+            title="프로젝트 생성",
+            status="completed",
+            request_type="command",
+            approval_state="completed",
+            next_actions=["view_result"],
+        ),
+    )
+    rejected = RejectRequestResponse(
+        request_id=2001,
+        status="rejected",
+        task=TaskSnapshot(
+            title="프로젝트 생성",
+            status="rejected",
+            request_type="command",
+            approval_state="cancelled",
+            next_actions=["retry"],
+        ),
+    )
     event = RequestEventResponse(
         sequence=2,
         type="response.completed",
@@ -202,12 +245,62 @@ def test_request_schemas_and_auth_context_match_contract() -> None:
     )
 
     assert auth.user_id == "user-1"
-    assert auth.request_id == "req-header-1"
+    assert auth.model_dump() == {"user_id": "user-1", "user_role": "admin"}
     assert request_response.model_dump()["message"] == "프로젝트 생성해줘"
     assert request_response.model_dump()["assistant_message"] == "처리 중입니다."
+    assert request_response.model_dump()["task"]["title"] == "프로젝트 생성"
     assert approved.status == "approved"
+    assert approved.model_dump()["task"]["approval_state"] == "completed"
     assert rejected.status == "rejected"
+    assert rejected.model_dump()["task"]["approval_state"] == "cancelled"
     assert event.model_dump()["sequence"] == 2
+
+
+def test_openapi_does_not_expose_request_or_org_headers(client: TestClient) -> None:
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    for path_item in payload["paths"].values():
+        for operation in path_item.values():
+            if not isinstance(operation, dict):
+                continue
+            names = {
+                parameter.get("name")
+                for parameter in operation.get("parameters", [])
+                if isinstance(parameter, dict)
+            }
+            assert "X-Request-Id" not in names
+            assert "X-Org-Id" not in names
+
+
+def test_openapi_exposes_component_examples_for_apidog_import(client: TestClient) -> None:
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schemas = response.json()["components"]["schemas"]
+
+    expected_examples = {
+        "CreateSessionRequest": {"title": "프로젝트 생성 상담"},
+        "CreateRequestRequest": {"message": "demo 프로젝트에 api 앱 만들어줘"},
+        "ApproveRequestRequest": {"confirmation_text": "승인"},
+        "SessionResponse": {"session_id": 1001, "user_id": "user-1", "status": "active"},
+        "RequestResponse": {"request_id": 2001, "status": "pending_approval", "task": {"title": "애플리케이션 생성"}},
+        "ApproveRequestResponse": {"request_id": 2001, "status": "completed", "task": {"approval_state": "completed"}},
+        "RejectRequestResponse": {"request_id": 2001, "status": "rejected", "task": {"approval_state": "cancelled"}},
+        "TaskSnapshot": {"title": "애플리케이션 생성", "status": "pending_approval", "approval_state": "awaiting_approval"},
+    }
+
+    for schema_name, expected in expected_examples.items():
+        schema = schemas[schema_name]
+        assert "example" in schema
+        for key, value in expected.items():
+            if isinstance(value, dict):
+                assert isinstance(schema["example"][key], dict)
+                for nested_key, nested_value in value.items():
+                    assert schema["example"][key][nested_key] == nested_value
+            else:
+                assert schema["example"][key] == value
 
 
 def test_create_request_returns_processing_status(client: TestClient) -> None:
@@ -226,6 +319,150 @@ def test_create_request_returns_processing_status(client: TestClient) -> None:
     assert response.status_code == 202
     assert isinstance(response.json()["request_id"], int)
     assert response.json()["status"] in {"processing", "pending_approval"}
+
+
+def test_request_responses_include_task_snapshot(db_session) -> None:
+    app = create_app()
+    expected_task = {
+        "kind": "operation",
+        "title": "프로젝트 생성",
+        "status": "pending_approval",
+        "request_type": "command",
+        "approval_state": "awaiting_approval",
+        "operation_id": "project.create",
+        "next_actions": ["approve", "edit", "cancel"],
+    }
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return StubGraphService(task_snapshot=expected_task)
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        created = client.post(
+            f"/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "프로젝트 생성해줘"},
+        )
+        request_id = created.json()["request_id"]
+        fetched = client.get(
+            f"/sessions/{session['session_id']}/requests/{request_id}",
+            headers={"X-User-Id": "user-1"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert created.status_code == 202
+    assert created.json()["task"] is not None
+    for key, value in expected_task.items():
+        assert created.json()["task"][key] == value
+    assert fetched.status_code == 200
+    assert fetched.json()["task"] is not None
+    for key, value in expected_task.items():
+        assert fetched.json()["task"][key] == value
+
+
+def test_create_request_persists_runtime_metadata(db_session) -> None:
+    app = create_app()
+    expected_task = {
+        "kind": "operation",
+        "title": "애플리케이션 생성",
+        "status": "pending_approval",
+        "request_type": "command",
+        "approval_state": "awaiting_approval",
+        "operation_id": "application.create_apps",
+        "next_actions": ["approve", "edit", "cancel"],
+    }
+    expected_plan = {
+        "goal": "demo 프로젝트에 api 앱 생성",
+        "specialist": "application",
+        "entities": {"project_name": "demo", "application_name": "api"},
+        "constraints": {"approval_required": True},
+        "candidate_steps": [
+            {
+                "step_id": "create-app",
+                "title": "앱 생성",
+                "status": "planned",
+                "operation_id": "application.create_apps",
+            }
+        ],
+        "risk_level": "medium",
+        "required_clarifications": ["cpu", "memory", "disk"],
+    }
+    expected_verifier = {
+        "decision": "clarify",
+        "summary": "리소스 값이 더 필요합니다.",
+        "missing_inputs": ["cpu", "memory", "disk"],
+        "follow_up_action": "fill_inputs",
+    }
+    expected_specialist = {
+        "specialist": "application",
+        "operation_id": "application.create_apps",
+        "summary": "애플리케이션 specialist를 선택했습니다.",
+        "resolved_inputs": {"name": "api"},
+        "missing_inputs": ["cpu", "memory", "disk"],
+    }
+    expected_summary = {
+        "active_goal": "demo 프로젝트 운영",
+        "recent_entities": {"project_name": "demo"},
+        "last_completed_task": "앱 상태 조회",
+        "last_verifier_decision": "clarify",
+        "updated_at": "2026-04-03T00:00:00Z",
+    }
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return StubGraphService(
+            task_snapshot=expected_task,
+            plan_object=expected_plan,
+            verifier_decision=expected_verifier,
+            specialist_result=expected_specialist,
+            session_summary=expected_summary,
+        )
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={"title": "runtime"},
+        ).json()
+
+        created = client.post(
+            f"/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "demo 프로젝트에 api 앱 만들어줘"},
+        )
+
+    app.dependency_overrides.clear()
+
+    record = RequestRepository(db_session).get_for_user(created.json()["request_id"], "user-1")
+    session_record = SessionRepository(db_session).get_for_user(session["session_id"], "user-1")
+
+    assert created.status_code == 202
+    assert created.json()["plan"]["specialist"] == "application"
+    assert created.json()["verifier"]["decision"] == "clarify"
+    assert created.json()["specialist"]["operation_id"] == "application.create_apps"
+    assert record is not None
+    assert json.loads(record.plan_object)["specialist"] == "application"
+    assert json.loads(record.verifier_decision)["decision"] == "clarify"
+    assert json.loads(record.specialist_result)["operation_id"] == "application.create_apps"
+    assert session_record is not None
+    assert json.loads(session_record.session_summary)["active_goal"] == "demo 프로젝트 운영"
 
 
 def test_create_request_returns_missing_inputs_when_command_needs_more_values(db_session) -> None:
@@ -427,6 +664,13 @@ def test_create_request_passes_last_effective_message_text_for_multi_turn_follow
         "last_final_response": None,
         "last_effective_message_text": "프로젝트 하나 만들어줘\n이름은 demo야 cpu는 1이야",
         "last_resolved_references": None,
+        "session_summary": {
+            "active_goal": "이름은 demo야 cpu는 1이야",
+            "recent_entities": {},
+            "last_completed_task": None,
+            "last_verifier_decision": None,
+            "updated_at": stub_graph_service.last_session_context["session_summary"]["updated_at"],
+        },
     }
 
 
@@ -531,6 +775,61 @@ def test_approve_request_resumes_pending_command(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
+
+
+def test_approve_request_returns_updated_task_snapshot(db_session) -> None:
+    app = create_app()
+    pending_task = {
+        "kind": "operation",
+        "title": "프로젝트 생성",
+        "status": "pending_approval",
+        "request_type": "command",
+        "approval_state": "awaiting_approval",
+        "operation_id": "project.create",
+        "next_actions": ["approve", "edit", "cancel"],
+    }
+    completed_task = {
+        "kind": "operation",
+        "title": "프로젝트 생성",
+        "status": "completed",
+        "request_type": "command",
+        "approval_state": "completed",
+        "operation_id": "project.create",
+        "next_actions": ["view_result"],
+    }
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return StubGraphService(task_snapshot=pending_task, resumed_task_snapshot=completed_task)
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+        request = client.post(
+            f"/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "프로젝트 생성해줘"},
+        ).json()
+
+        response = client.post(
+            f"/sessions/{session['session_id']}/requests/{request['request_id']}/approve",
+            headers={"X-User-Id": "user-1"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["task"] is not None
+    for key, value in completed_task.items():
+        assert response.json()["task"][key] == value
 
 
 def test_pending_high_risk_request_accepts_exact_name_reply(db_session) -> None:
@@ -688,3 +987,47 @@ def test_reject_request_emits_rejected_event(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "rejected"
     assert "event: approval.rejected" in stream_response.text
+
+
+def test_create_request_emits_task_snapshot_in_events(db_session) -> None:
+    app = create_app()
+    expected_task = {
+        "kind": "operation",
+        "title": "프로젝트 생성",
+        "status": "pending_approval",
+        "request_type": "command",
+        "approval_state": "awaiting_approval",
+        "operation_id": "project.create",
+        "next_actions": ["approve", "edit", "cancel"],
+    }
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return StubGraphService(task_snapshot=expected_task)
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+        request = client.post(
+            f"/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "프로젝트 생성해줘"},
+        ).json()
+
+        events = RequestEventRepository(db_session).list_after_sequence(request["request_id"], 0)
+
+    app.dependency_overrides.clear()
+
+    assert len(events) >= 2
+    payloads = [json.loads(event.payload) for event in events]
+    for key, value in expected_task.items():
+        assert payloads[0]["task"][key] == value
+        assert payloads[1]["task"][key] == value

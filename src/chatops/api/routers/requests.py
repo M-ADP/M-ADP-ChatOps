@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from chatops.api.dependencies import get_auth_context, get_db_session, get_graph_service
 from chatops.common.config.settings import get_app_config
 from chatops.db.models import RequestRecord
-from chatops.db.repositories import RequestRepository, SessionRepository
+from chatops.db.repositories import MessageRepository, RequestRepository, SessionRepository
 from chatops.domain.enums import RequestStatus
 from chatops.graph.service import GraphService
 from chatops.schemas.auth import AuthContext
@@ -23,11 +23,16 @@ from chatops.schemas.requests import (
     RequestResponse,
 )
 from chatops.services.approval_intent import ApprovalIntent, detect_approval_intent
+from chatops.services.entity_memory_service import EntityMemoryService
 from chatops.services.events import EventService
+from chatops.services.session_summary_service import SessionSummaryService
+from chatops.services.session_messages import SessionMessageService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions/{session_id}/requests", tags=["requests"])
+entity_memory_service = EntityMemoryService()
+session_summary_service = SessionSummaryService()
 
 
 # ──────────────────────────────────────────────────
@@ -65,6 +70,99 @@ def _load_json_field(raw_value: str | None) -> dict | list | None:
         return json.loads(raw_value)
     except json.JSONDecodeError:
         return None
+
+
+def _load_task_snapshot(raw_value: str | None) -> dict | None:
+    loaded = _load_json_field(raw_value)
+    if isinstance(loaded, dict):
+        return loaded
+    return None
+
+
+def _load_plan_object(raw_value: str | None) -> dict | None:
+    loaded = _load_json_field(raw_value)
+    if isinstance(loaded, dict):
+        return loaded
+    return None
+
+
+def _load_verifier_decision(raw_value: str | None) -> dict | None:
+    loaded = _load_json_field(raw_value)
+    if isinstance(loaded, dict):
+        return loaded
+    return None
+
+
+def _load_specialist_result(raw_value: str | None) -> dict | None:
+    loaded = _load_json_field(raw_value)
+    if isinstance(loaded, dict):
+        return loaded
+    return None
+
+
+def _build_request_response(record: RequestRecord, message_text: str) -> RequestResponse:
+    return RequestResponse(
+        request_id=record.id,
+        session_id=record.session_id,
+        status=record.status,
+        message=message_text,
+        assistant_message=record.final_response,
+        request_type=record.request_type,
+        requires_approval=record.requires_approval,
+        missing_inputs=_load_missing_inputs(record.missing_inputs),
+        final_response=record.final_response,
+        task=_load_task_snapshot(record.task_snapshot),
+        plan=_load_plan_object(record.plan_object),
+        verifier=_load_verifier_decision(record.verifier_decision),
+        specialist=_load_specialist_result(record.specialist_result),
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _append_user_message(
+    db_session: Session,
+    *,
+    session_id: int,
+    request_id: int,
+    user_id: str,
+    message_text: str,
+) -> None:
+    MessageRepository(db_session).create(
+        session_id=session_id,
+        request_id=request_id,
+        user_id=user_id,
+        role="user",
+        message_type="text",
+        text=message_text,
+    )
+
+
+def _sync_assistant_message(db_session: Session, record: RequestRecord) -> None:
+    task_snapshot = record.task_snapshot
+    message_type = "task" if task_snapshot else "text"
+    text = SessionMessageService.assistant_text(record.final_response, task_snapshot)
+    if text is None and task_snapshot is None:
+        return
+    MessageRepository(db_session).upsert_assistant_for_request(
+        session_id=record.session_id,
+        request_id=record.id,
+        user_id=record.user_id,
+        message_type=message_type,
+        text=text,
+        task_snapshot=task_snapshot,
+        plan_object=record.plan_object,
+        verifier_decision=record.verifier_decision,
+        specialist_result=record.specialist_result,
+    )
+
+
+def _sync_session_summary(db_session: Session, *, session_id: int, user_id: str, session_summary: dict | None) -> None:
+    SessionRepository(db_session).update_summary(
+        session_id=session_id,
+        user_id=user_id,
+        session_summary=_dump_json_field(session_summary),
+    )
 
 
 def _load_request_or_404(db_session: Session, request_id: int, user_id: str) -> RequestRecord:
@@ -166,6 +264,11 @@ def create_request(
             "last_final_response": previous_request.final_response,
             "last_resolved_references": _load_json_field(previous_request.resolved_references),
         }
+    session_summary = session_summary_service.load(session_record.session_summary)
+    session_context = entity_memory_service.merge_into_session_context(
+        session_context=session_context,
+        session_summary=session_summary,
+    )
 
     # 자연어 승인/거절: 이전 요청이 pending_approval이면 intent 감지
     if previous_request is not None and previous_request.status == "pending_approval":
@@ -177,18 +280,15 @@ def create_request(
             previous_request.status = RequestStatus.APPROVAL_EXPIRED.value
             previous_request.final_response = "요청이 만료되었습니다. 다시 요청해주세요."
             db_session.commit()
-            return RequestResponse(
-                request_id=previous_request.id,
+            _append_user_message(
+                db_session,
                 session_id=previous_request.session_id,
-                status=previous_request.status,
-                message=payload.message,
-                assistant_message=previous_request.final_response,
-                request_type=previous_request.request_type,
-                requires_approval=False,
-                final_response=previous_request.final_response,
-                created_at=previous_request.created_at,
-                updated_at=previous_request.updated_at,
+                request_id=previous_request.id,
+                user_id=auth.user_id,
+                message_text=payload.message,
             )
+            _sync_assistant_message(db_session, previous_request)
+            return _build_request_response(previous_request, payload.message)
 
         intent = detect_approval_intent(payload.message)
         if intent == ApprovalIntent.APPROVE:
@@ -230,7 +330,6 @@ def create_request(
         user_id=auth.user_id,
         message_text=payload.message,
         user_role=auth.user_role,
-        org_id=auth.org_id,
         session_context=session_context,
     )
 
@@ -247,10 +346,26 @@ def create_request(
     record.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
     record.final_response = graph_result.final_response
     record.resolved_references = _dump_json_field(graph_result.resolved_references)
+    record.task_snapshot = _dump_json_field(graph_result.task_snapshot)
+    record.plan_object = _dump_json_field(graph_result.plan_object)
+    record.verifier_decision = _dump_json_field(graph_result.verifier_decision)
+    record.specialist_result = _dump_json_field(graph_result.specialist_result)
     if superseded_request is not None:
         _supersede_pending_request(superseded_request, replacement_request_id=record.id)
     db_session.commit()
     db_session.refresh(record)
+    _sync_session_summary(
+        db_session,
+        session_id=record.session_id,
+        user_id=auth.user_id,
+        session_summary=graph_result.session_summary
+        or session_summary_service.build(
+            message_text=payload.message,
+            plan_object=graph_result.plan_object,
+            task_snapshot=graph_result.task_snapshot,
+            verifier_decision=graph_result.verifier_decision,
+        ),
+    )
     event_service = EventService(db_session)
     event_service.append_event(
         request_id=record.id,
@@ -261,6 +376,7 @@ def create_request(
             "request_id": record.id,
             "session_id": record.session_id,
             "status": record.status,
+            "task": _load_task_snapshot(record.task_snapshot),
         },
     )
     if record.status == "pending_approval":
@@ -275,6 +391,7 @@ def create_request(
                 "status": record.status,
                 "final_response": record.final_response,
                 "missing_inputs": _load_missing_inputs(record.missing_inputs),
+                "task": _load_task_snapshot(record.task_snapshot),
             },
             audit_context=_build_graph_audit_context(graph_result, auth.user_id),
         )
@@ -289,6 +406,7 @@ def create_request(
                 "session_id": record.session_id,
                 "status": record.status,
                 "final_response": record.final_response,
+                "task": _load_task_snapshot(record.task_snapshot),
             },
             audit_context=_build_graph_audit_context(graph_result, auth.user_id),
         )
@@ -303,6 +421,7 @@ def create_request(
                 "session_id": record.session_id,
                 "status": record.status,
                 "final_response": record.final_response,
+                "task": _load_task_snapshot(record.task_snapshot),
             },
             audit_context=_build_graph_audit_context(graph_result, auth.user_id),
         )
@@ -317,22 +436,19 @@ def create_request(
                 "session_id": superseded_request.session_id,
                 "status": superseded_request.status,
                 "superseded_by": record.id,
+                "task": _load_task_snapshot(superseded_request.task_snapshot),
             },
         )
 
-    return RequestResponse(
-        request_id=record.id,
+    _append_user_message(
+        db_session,
         session_id=record.session_id,
-        status=record.status,
-        message=record.message_text,
-        assistant_message=record.final_response,
-        request_type=record.request_type,
-        requires_approval=record.requires_approval,
-        missing_inputs=_load_missing_inputs(record.missing_inputs),
-        final_response=record.final_response,
-        created_at=record.created_at,
-        updated_at=record.updated_at,
+        request_id=record.id,
+        user_id=auth.user_id,
+        message_text=payload.message,
     )
+    _sync_assistant_message(db_session, record)
+    return _build_request_response(record, record.message_text)
 
 
 def _handle_natural_language_approval(
@@ -394,14 +510,29 @@ def _handle_natural_language_approval(
         message_text=previous_request.message_text,
         approval_granted=approval_granted,
         user_role=auth.user_role,
-        org_id=auth.org_id,
     )
     previous_request.status = graph_result.status
     previous_request.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
     previous_request.final_response = graph_result.final_response
     previous_request.requires_approval = graph_result.requires_approval
+    previous_request.task_snapshot = _dump_json_field(graph_result.task_snapshot)
+    previous_request.plan_object = _dump_json_field(graph_result.plan_object)
+    previous_request.verifier_decision = _dump_json_field(graph_result.verifier_decision)
+    previous_request.specialist_result = _dump_json_field(graph_result.specialist_result)
     db_session.commit()
     db_session.refresh(previous_request)
+    _sync_session_summary(
+        db_session,
+        session_id=previous_request.session_id,
+        user_id=auth.user_id,
+        session_summary=graph_result.session_summary
+        or session_summary_service.build(
+            message_text=previous_request.message_text,
+            plan_object=graph_result.plan_object,
+            task_snapshot=graph_result.task_snapshot,
+            verifier_decision=graph_result.verifier_decision,
+        ),
+    )
     event_type = "execution.completed" if previous_request.status == "completed" else "execution.failed"
     EventService(db_session).append_audit_event(
         request_id=previous_request.id,
@@ -413,22 +544,19 @@ def _handle_natural_language_approval(
             "session_id": previous_request.session_id,
             "status": previous_request.status,
             "final_response": previous_request.final_response,
+            "task": _load_task_snapshot(previous_request.task_snapshot),
         },
         audit_context=_build_graph_audit_context(graph_result, auth.user_id),
     )
-    return RequestResponse(
-        request_id=previous_request.id,
+    _append_user_message(
+        db_session,
         session_id=previous_request.session_id,
-        status=previous_request.status,
-        message=message_text,
-        assistant_message=previous_request.final_response,
-        request_type=previous_request.request_type,
-        requires_approval=previous_request.requires_approval,
-        missing_inputs=_load_missing_inputs(previous_request.missing_inputs),
-        final_response=previous_request.final_response,
-        created_at=previous_request.created_at,
-        updated_at=previous_request.updated_at,
+        request_id=previous_request.id,
+        user_id=auth.user_id,
+        message_text=message_text,
     )
+    _sync_assistant_message(db_session, previous_request)
+    return _build_request_response(previous_request, message_text)
 
 
 def _handle_natural_language_rejection(
@@ -447,14 +575,29 @@ def _handle_natural_language_rejection(
         message_text=previous_request.message_text,
         approval_granted=False,
         user_role=auth.user_role,
-        org_id=auth.org_id,
     )
     previous_request.status = graph_result.status
     previous_request.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
     previous_request.final_response = graph_result.final_response
     previous_request.requires_approval = graph_result.requires_approval
+    previous_request.task_snapshot = _dump_json_field(graph_result.task_snapshot)
+    previous_request.plan_object = _dump_json_field(graph_result.plan_object)
+    previous_request.verifier_decision = _dump_json_field(graph_result.verifier_decision)
+    previous_request.specialist_result = _dump_json_field(graph_result.specialist_result)
     db_session.commit()
     db_session.refresh(previous_request)
+    _sync_session_summary(
+        db_session,
+        session_id=previous_request.session_id,
+        user_id=auth.user_id,
+        session_summary=graph_result.session_summary
+        or session_summary_service.build(
+            message_text=previous_request.message_text,
+            plan_object=graph_result.plan_object,
+            task_snapshot=graph_result.task_snapshot,
+            verifier_decision=graph_result.verifier_decision,
+        ),
+    )
     EventService(db_session).append_audit_event(
         request_id=previous_request.id,
         session_id=previous_request.session_id,
@@ -464,22 +607,19 @@ def _handle_natural_language_rejection(
             "request_id": previous_request.id,
             "session_id": previous_request.session_id,
             "status": previous_request.status,
+            "task": _load_task_snapshot(previous_request.task_snapshot),
         },
         audit_context=_build_graph_audit_context(graph_result, auth.user_id),
     )
-    return RequestResponse(
-        request_id=previous_request.id,
+    _append_user_message(
+        db_session,
         session_id=previous_request.session_id,
-        status=previous_request.status,
-        message=message_text,
-        assistant_message=previous_request.final_response,
-        request_type=previous_request.request_type,
-        requires_approval=previous_request.requires_approval,
-        missing_inputs=_load_missing_inputs(previous_request.missing_inputs),
-        final_response=previous_request.final_response,
-        created_at=previous_request.created_at,
-        updated_at=previous_request.updated_at,
+        request_id=previous_request.id,
+        user_id=auth.user_id,
+        message_text=message_text,
     )
+    _sync_assistant_message(db_session, previous_request)
+    return _build_request_response(previous_request, message_text)
 
 
 @router.get("/{request_id}", response_model=RequestResponse)
@@ -504,6 +644,10 @@ def get_request(
         requires_approval=record.requires_approval,
         missing_inputs=_load_missing_inputs(record.missing_inputs),
         final_response=record.final_response,
+        task=_load_task_snapshot(record.task_snapshot),
+        plan=_load_plan_object(record.plan_object),
+        verifier=_load_verifier_decision(record.verifier_decision),
+        specialist=_load_specialist_result(record.specialist_result),
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -557,14 +701,29 @@ def approve_request(
         message_text=record.message_text,
         approval_granted=(payload.confirmation_text.strip() if payload and payload.confirmation_text else True),
         user_role=auth.user_role,
-        org_id=auth.org_id,
     )
     record.status = graph_result.status
     record.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
     record.final_response = graph_result.final_response
     record.requires_approval = graph_result.requires_approval
+    record.task_snapshot = _dump_json_field(graph_result.task_snapshot)
+    record.plan_object = _dump_json_field(graph_result.plan_object)
+    record.verifier_decision = _dump_json_field(graph_result.verifier_decision)
+    record.specialist_result = _dump_json_field(graph_result.specialist_result)
     db_session.commit()
     db_session.refresh(record)
+    _sync_session_summary(
+        db_session,
+        session_id=record.session_id,
+        user_id=auth.user_id,
+        session_summary=graph_result.session_summary
+        or session_summary_service.build(
+            message_text=record.message_text,
+            plan_object=graph_result.plan_object,
+            task_snapshot=graph_result.task_snapshot,
+            verifier_decision=graph_result.verifier_decision,
+        ),
+    )
     EventService(db_session).append_audit_event(
         request_id=record.id,
         session_id=record.session_id,
@@ -575,13 +734,19 @@ def approve_request(
             "session_id": record.session_id,
             "status": record.status,
             "final_response": record.final_response,
+            "task": _load_task_snapshot(record.task_snapshot),
         },
         audit_context=_build_graph_audit_context(graph_result, auth.user_id),
     )
+    _sync_assistant_message(db_session, record)
     return ApproveRequestResponse(
         request_id=record.id,
         status=record.status,
         assistant_message=record.final_response,
+        task=_load_task_snapshot(record.task_snapshot),
+        plan=_load_plan_object(record.plan_object),
+        verifier=_load_verifier_decision(record.verifier_decision),
+        specialist=_load_specialist_result(record.specialist_result),
     )
 
 
@@ -608,14 +773,29 @@ def reject_request(
         message_text=record.message_text,
         approval_granted=False,
         user_role=auth.user_role,
-        org_id=auth.org_id,
     )
     record.status = graph_result.status
     record.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
     record.final_response = graph_result.final_response
     record.requires_approval = graph_result.requires_approval
+    record.task_snapshot = _dump_json_field(graph_result.task_snapshot)
+    record.plan_object = _dump_json_field(graph_result.plan_object)
+    record.verifier_decision = _dump_json_field(graph_result.verifier_decision)
+    record.specialist_result = _dump_json_field(graph_result.specialist_result)
     db_session.commit()
     db_session.refresh(record)
+    _sync_session_summary(
+        db_session,
+        session_id=record.session_id,
+        user_id=auth.user_id,
+        session_summary=graph_result.session_summary
+        or session_summary_service.build(
+            message_text=record.message_text,
+            plan_object=graph_result.plan_object,
+            task_snapshot=graph_result.task_snapshot,
+            verifier_decision=graph_result.verifier_decision,
+        ),
+    )
     EventService(db_session).append_audit_event(
         request_id=record.id,
         session_id=record.session_id,
@@ -625,11 +805,17 @@ def reject_request(
             "request_id": record.id,
             "session_id": record.session_id,
             "status": record.status,
+            "task": _load_task_snapshot(record.task_snapshot),
         },
         audit_context=_build_graph_audit_context(graph_result, auth.user_id),
     )
+    _sync_assistant_message(db_session, record)
     return RejectRequestResponse(
         request_id=record.id,
         status=record.status,
         assistant_message=record.final_response,
+        task=_load_task_snapshot(record.task_snapshot),
+        plan=_load_plan_object(record.plan_object),
+        verifier=_load_verifier_decision(record.verifier_decision),
+        specialist=_load_specialist_result(record.specialist_result),
     )

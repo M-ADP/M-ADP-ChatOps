@@ -18,6 +18,9 @@ class GraphState(TypedDict, total=False):
     intent: str
     classification_reason: str
     classification_confidence: float
+    selected_specialist: str | None
+    policy_decision: dict[str, Any] | None
+    retry_count: int
     route: str
     selected_operation_ids: list[str]
     selected_operation_id: str | None
@@ -46,3 +49,8 @@ class GraphState(TypedDict, total=False):
     clarification_type: str | None
     fallback_used: bool
     execution_audit: dict[str, Any] | None
+    task_snapshot: dict[str, Any] | None
+    plan_object: dict[str, Any] | None
+    verifier_decision: dict[str, Any] | None
+    specialist_result: dict[str, Any] | None
+    session_summary: dict[str, Any] | None

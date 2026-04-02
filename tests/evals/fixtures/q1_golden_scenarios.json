@@ -1,0 +1,25 @@
+[
+  {
+    "name": "query runtime metadata",
+    "message_text": "현재 앱 트래픽 상태 알려줘",
+    "expectation": {
+      "status": "completed",
+      "request_type": "query",
+      "selected_operation_ids": ["monitoring.get_app_deployment_traffic"],
+      "response_contains": ["조회 응답"],
+      "dispatched": true
+    }
+  },
+  {
+    "name": "command planner metadata",
+    "message_text": "프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
+    "expectation": {
+      "status": "pending_approval",
+      "request_type": "command",
+      "requires_approval": true,
+      "selected_operation_ids": ["project.create"],
+      "response_contains": ["실행할까요?"],
+      "dispatched": false
+    }
+  }
+]

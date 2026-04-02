@@ -14,19 +14,23 @@ class GraphWorkflow:
         graph = StateGraph(GraphState)
         graph.add_node("ingest_request", self.nodes.ingest_request)
         graph.add_node("classify_request", self.nodes.classify_request)
+        graph.add_node("plan_runtime", self.nodes.plan_runtime)
         graph.add_node("route_request", self.nodes.route_request)
         graph.add_node("answer_inquiry", self.nodes.answer_inquiry)
         graph.add_node("prepare_query", self.nodes.prepare_query)
         graph.add_node("execute_query", self.nodes.execute_query)
+        graph.add_node("verify_query", self.nodes.verify_query)
         graph.add_node("interpret_result", self.nodes.interpret_result)
         graph.add_node("plan_command", self.nodes.plan_command)
         graph.add_node("wait_for_approval", self.nodes.wait_for_approval)
         graph.add_node("execute_command", self.nodes.execute_command)
+        graph.add_node("verify_command", self.nodes.verify_command)
         graph.add_node("respond_command", self.nodes.respond_command)
 
         graph.add_edge(START, "ingest_request")
         graph.add_edge("ingest_request", "classify_request")
-        graph.add_edge("classify_request", "route_request")
+        graph.add_edge("classify_request", "plan_runtime")
+        graph.add_edge("plan_runtime", "route_request")
         graph.add_conditional_edges(
             "route_request",
             lambda state: state["route"],
@@ -49,7 +53,8 @@ class GraphWorkflow:
                 "complete": END,
             },
         )
-        graph.add_edge("execute_query", "interpret_result")
+        graph.add_edge("execute_query", "verify_query")
+        graph.add_edge("verify_query", "interpret_result")
         graph.add_edge("interpret_result", END)
         graph.add_conditional_edges(
             "plan_command",
@@ -67,7 +72,8 @@ class GraphWorkflow:
                 "rejected": END,
             },
         )
-        graph.add_edge("execute_command", "respond_command")
+        graph.add_edge("execute_command", "verify_command")
+        graph.add_edge("verify_command", "respond_command")
         graph.add_edge("respond_command", END)
 
         return graph.compile(checkpointer=checkpointer)

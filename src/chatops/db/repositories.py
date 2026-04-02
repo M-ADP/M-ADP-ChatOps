@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from chatops.db.models import RequestEventRecord, RequestRecord, SessionRecord
+from chatops.db.models import MessageRecord, RequestEventRecord, RequestRecord, SessionRecord
 from chatops.domain.enums import RequestStatus, SessionStatus
 
 
@@ -26,6 +26,23 @@ class SessionRepository:
             SessionRecord.user_id == user_id,
         )
         return self.session.execute(query).scalar_one_or_none()
+
+    def update_summary(self, session_id: int, user_id: str, session_summary: str | None) -> SessionRecord | None:
+        record = self.get_for_user(session_id=session_id, user_id=user_id)
+        if record is None:
+            return None
+        record.session_summary = session_summary
+        self.session.commit()
+        self.session.refresh(record)
+        return record
+
+    def list_for_user(self, user_id: str) -> list[SessionRecord]:
+        query = (
+            select(SessionRecord)
+            .where(SessionRecord.user_id == user_id)
+            .order_by(SessionRecord.created_at.desc(), SessionRecord.id.desc())
+        )
+        return list(self.session.execute(query).scalars())
 
 
 class RequestRepository:
@@ -78,11 +95,40 @@ class RequestRepository:
         )
         return self.session.execute(query).scalar_one_or_none()
 
+    def list_for_session(self, session_id: int, user_id: str) -> list[RequestRecord]:
+        query = (
+            select(RequestRecord)
+            .where(
+                RequestRecord.session_id == session_id,
+                RequestRecord.user_id == user_id,
+            )
+            .order_by(RequestRecord.created_at.asc(), RequestRecord.id.asc())
+        )
+        return list(self.session.execute(query).scalars())
+
     def update_status(self, request_id: int, status: str) -> RequestRecord | None:
         record = self.session.get(RequestRecord, request_id)
         if record is None:
             return None
         record.status = status
+        self.session.commit()
+        self.session.refresh(record)
+        return record
+
+    def save_runtime_metadata(
+        self,
+        request_id: int,
+        *,
+        plan_object: str | None = None,
+        verifier_decision: str | None = None,
+        specialist_result: str | None = None,
+    ) -> RequestRecord | None:
+        record = self.session.get(RequestRecord, request_id)
+        if record is None:
+            return None
+        record.plan_object = plan_object
+        record.verifier_decision = verifier_decision
+        record.specialist_result = specialist_result
         self.session.commit()
         self.session.refresh(record)
         return record
@@ -132,3 +178,125 @@ class RequestEventRepository:
         )
         latest = self.session.execute(query).scalar_one_or_none()
         return int(latest or 0)
+
+
+class MessageRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def create(
+        self,
+        *,
+        session_id: int,
+        user_id: str,
+        role: str,
+        message_type: str,
+        text: str | None = None,
+        request_id: int | None = None,
+        task_snapshot: str | None = None,
+        plan_object: str | None = None,
+        verifier_decision: str | None = None,
+        specialist_result: str | None = None,
+    ) -> MessageRecord:
+        record = MessageRecord(
+            session_id=session_id,
+            request_id=request_id,
+            user_id=user_id,
+            role=role,
+            message_type=message_type,
+            text=text,
+            task_snapshot=task_snapshot,
+            plan_object=plan_object,
+            verifier_decision=verifier_decision,
+            specialist_result=specialist_result,
+        )
+        self.session.add(record)
+        self.session.commit()
+        self.session.refresh(record)
+        return record
+
+    def get_assistant_for_request(self, request_id: int, user_id: str) -> MessageRecord | None:
+        query = (
+            select(MessageRecord)
+            .where(
+                MessageRecord.request_id == request_id,
+                MessageRecord.user_id == user_id,
+                MessageRecord.role == "assistant",
+            )
+            .order_by(MessageRecord.created_at.asc(), MessageRecord.id.asc())
+            .limit(1)
+        )
+        return self.session.execute(query).scalar_one_or_none()
+
+    def upsert_assistant_for_request(
+        self,
+        *,
+        session_id: int,
+        request_id: int,
+        user_id: str,
+        message_type: str,
+        text: str | None = None,
+        task_snapshot: str | None = None,
+        plan_object: str | None = None,
+        verifier_decision: str | None = None,
+        specialist_result: str | None = None,
+    ) -> MessageRecord:
+        record = self.get_assistant_for_request(request_id=request_id, user_id=user_id)
+        if record is None:
+            return self.create(
+                session_id=session_id,
+                request_id=request_id,
+                user_id=user_id,
+                role="assistant",
+                message_type=message_type,
+                text=text,
+                task_snapshot=task_snapshot,
+                plan_object=plan_object,
+                verifier_decision=verifier_decision,
+                specialist_result=specialist_result,
+            )
+        record.message_type = message_type
+        record.text = text
+        record.task_snapshot = task_snapshot
+        record.plan_object = plan_object
+        record.verifier_decision = verifier_decision
+        record.specialist_result = specialist_result
+        self.session.commit()
+        self.session.refresh(record)
+        return record
+
+    def list_for_session(self, session_id: int, user_id: str) -> list[MessageRecord]:
+        query = (
+            select(MessageRecord)
+            .where(
+                MessageRecord.session_id == session_id,
+                MessageRecord.user_id == user_id,
+            )
+            .order_by(MessageRecord.created_at.asc(), MessageRecord.id.asc())
+        )
+        return list(self.session.execute(query).scalars())
+
+    def list_for_sessions(self, session_ids: list[int], user_id: str) -> list[MessageRecord]:
+        if not session_ids:
+            return []
+        query = (
+            select(MessageRecord)
+            .where(
+                MessageRecord.session_id.in_(session_ids),
+                MessageRecord.user_id == user_id,
+            )
+            .order_by(MessageRecord.created_at.asc(), MessageRecord.id.asc())
+        )
+        return list(self.session.execute(query).scalars())
+
+    def list_recent_for_session(self, session_id: int, user_id: str, limit: int) -> list[MessageRecord]:
+        query = (
+            select(MessageRecord)
+            .where(
+                MessageRecord.session_id == session_id,
+                MessageRecord.user_id == user_id,
+            )
+            .order_by(MessageRecord.created_at.desc(), MessageRecord.id.desc())
+            .limit(limit)
+        )
+        return list(reversed(list(self.session.execute(query).scalars())))

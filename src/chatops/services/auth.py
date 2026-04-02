@@ -7,9 +7,7 @@ from chatops.schemas.auth import AuthContext
 
 def build_auth_context(
     user_id: str | None,
-    request_id: str | None = None,
     user_role: str | None = None,
-    org_id: str | None = None,
 ) -> AuthContext:
     if not user_id:
         raise HTTPException(
@@ -19,9 +17,7 @@ def build_auth_context(
 
     return AuthContext(
         user_id=user_id,
-        request_id=request_id,
         user_role=user_role,
-        org_id=org_id,
     )
 
 
@@ -29,15 +25,11 @@ def missing_auth_headers(
     required_headers: tuple[str, ...] | list[str],
     *,
     user_id: str | None,
-    request_id: str | None = None,
     user_role: str | None = None,
-    org_id: str | None = None,
 ) -> list[str]:
     header_values = {
         "X-User-Id": user_id,
-        "X-Request-Id": request_id,
         "X-User-Role": user_role,
-        "X-Org-Id": org_id,
     }
     missing: list[str] = []
     for header in required_headers:

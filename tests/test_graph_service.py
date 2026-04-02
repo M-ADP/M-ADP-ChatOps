@@ -46,6 +46,30 @@ class FakeLLMService:
     def plan_command(self, message_text: str, operation_ids: list[str]) -> str:
         return f"실행 계획: {operation_ids[0]}"
 
+    def build_plan_object(
+        self,
+        message_text: str,
+        request_type: str,
+        candidate_operation_ids: list[str],
+    ) -> dict[str, object]:
+        specialist = candidate_operation_ids[0].split(".", 1)[0] if candidate_operation_ids else request_type
+        return {
+            "goal": message_text,
+            "specialist": specialist,
+            "entities": {"message_text": message_text},
+            "constraints": {"approval_required": request_type == "command"},
+            "candidate_steps": [
+                {
+                    "step_id": "primary-operation",
+                    "title": "주요 작업 실행",
+                    "status": "planned",
+                    "operation_id": candidate_operation_ids[0] if candidate_operation_ids else None,
+                }
+            ],
+            "risk_level": "medium" if request_type == "command" else "low",
+            "required_clarifications": [],
+        }
+
 
 @dataclass
 class FakeRegistryService:
@@ -238,6 +262,36 @@ def test_query_returns_interpreted_response() -> None:
     assert result.fallback_used is False
 
 
+def test_query_result_exposes_completed_task_snapshot() -> None:
+    result = fake_graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="현재 앱 트래픽 상태 알려줘",
+    )
+
+    assert result.task_snapshot is not None
+    assert result.task_snapshot["title"] == "앱 트래픽 조회"
+    assert result.task_snapshot["status"] == "completed"
+    assert result.task_snapshot["approval_state"] == "completed"
+    assert result.task_snapshot["next_actions"] == ["refine", "compare", "export"]
+
+
+def test_query_result_exposes_plan_and_specialist_metadata() -> None:
+    result = fake_graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="현재 앱 트래픽 상태 알려줘",
+    )
+
+    assert result.plan_object is not None
+    assert result.plan_object["specialist"] == "monitoring"
+    assert result.specialist_result is not None
+    assert result.specialist_result["specialist"] == "monitoring"
+    assert result.specialist_result["operation_id"] == "monitoring.get_app_deployment_traffic"
+    assert result.verifier_decision is not None
+    assert result.verifier_decision["decision"] == "success"
+
+
 def test_query_downstream_failure_returns_failed_status() -> None:
     class QueryFailingDispatcher(FakeDownstreamDispatcher):
         async def execute_query(
@@ -335,6 +389,56 @@ def test_command_request_stops_at_pending_approval() -> None:
     assert result.selected_operation_ids == ["project.create"]
 
 
+def test_command_request_exposes_task_snapshot() -> None:
+    result = fake_graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
+    )
+
+    assert result.task_snapshot is not None
+    assert result.task_snapshot["title"] == "프로젝트 생성"
+    assert result.task_snapshot["operation_id"] == "project.create"
+    assert result.task_snapshot["approval_state"] == "awaiting_approval"
+    assert result.task_snapshot["target"] == {"project_name": "demo"}
+    assert result.task_snapshot["filled_inputs"]["name"] == "demo"
+    assert result.task_snapshot["filled_inputs"]["max_cpu"] == 1
+    assert result.task_snapshot["missing_inputs"] in (None, [])
+    assert result.task_snapshot["next_actions"] == ["approve", "edit", "cancel"]
+
+
+def test_command_request_exposes_plan_and_specialist_metadata() -> None:
+    result = fake_graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
+    )
+
+    assert result.plan_object is not None
+    assert result.plan_object["specialist"] == "project"
+    assert result.specialist_result is not None
+    assert result.specialist_result["specialist"] == "project"
+    assert result.specialist_result["operation_id"] == "project.create"
+
+
+def test_command_resume_exposes_verifier_decision() -> None:
+    pending = fake_graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
+    )
+    result = fake_graph_service.resume_request(
+        request_id=pending.request_id,
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 생성 name=demo max_cpu=1 max_memory=0.5 max_disk=10",
+        approval_granted=True,
+    )
+
+    assert result.verifier_decision is not None
+    assert result.verifier_decision["decision"] == "success"
+
+
 def test_command_missing_required_role_header_fails_before_approval() -> None:
     class RoleRequiredCommandRegistry(FakeRegistryService):
         def _command_entries(self) -> list[RegistryEntry]:
@@ -408,6 +512,10 @@ def test_command_resume_executes_after_approval() -> None:
     assert result.status == "completed"
     assert result.requires_approval is False
     assert result.final_response == "프로젝트를 생성했습니다. 프로젝트 설정을 변경하거나 앱을 추가할 수 있습니다."
+    assert result.task_snapshot is not None
+    assert result.task_snapshot["status"] == "completed"
+    assert result.task_snapshot["approval_state"] == "completed"
+    assert result.task_snapshot["next_actions"] == ["view_result"]
 
 
 def test_command_resume_passes_resolved_inputs_to_adapter() -> None:

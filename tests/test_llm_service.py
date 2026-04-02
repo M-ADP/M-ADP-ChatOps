@@ -247,3 +247,95 @@ def test_groq_llm_service_grounds_inquiry_fallback_on_registry_context() -> None
     assert "프로젝트 생성" in result
     assert "프로젝트 이름" in result
     assert "승인" in result
+
+
+def test_groq_llm_service_builds_plan_object() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        assert payload["response_format"] == {"type": "json_object"}
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "goal": "demo 프로젝트에 api 앱 생성",
+                                    "specialist": "application",
+                                    "entities": {"project_name": "demo", "application_name": "api"},
+                                    "constraints": {"approval_required": True},
+                                    "candidate_steps": [
+                                        {
+                                            "step_id": "create-app",
+                                            "title": "앱 생성",
+                                            "status": "planned",
+                                            "operation_id": "application.create_apps",
+                                        }
+                                    ],
+                                    "risk_level": "medium",
+                                    "required_clarifications": ["cpu", "memory", "disk"],
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    service = GroqLLMService(
+        api_key="test-key",
+        model="llama-3.3-70b-versatile",
+        timeout_seconds=10,
+        client=client,
+    )
+
+    result = service.build_plan_object(
+        message_text="demo 프로젝트에 api 앱 만들어줘",
+        request_type="command",
+        candidate_operation_ids=["application.create_apps"],
+    )
+
+    assert result["specialist"] == "application"
+    assert result["candidate_steps"][0]["operation_id"] == "application.create_apps"
+
+
+def test_groq_llm_service_verifies_execution_result() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        assert payload["response_format"] == {"type": "json_object"}
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "decision": "success",
+                                    "summary": "검증 결과 문제가 없습니다.",
+                                    "missing_inputs": [],
+                                    "follow_up_action": "complete",
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    service = GroqLLMService(
+        api_key="test-key",
+        model="llama-3.3-70b-versatile",
+        timeout_seconds=10,
+        client=client,
+    )
+
+    result = service.verify_execution(
+        execution_result={"success": True, "summary": "앱 생성 완료", "status_code": 200},
+    )
+
+    assert result["decision"] == "success"
+    assert result["follow_up_action"] == "complete"

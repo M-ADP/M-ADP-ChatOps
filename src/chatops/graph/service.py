@@ -37,6 +37,11 @@ class GraphResult:
     clarification_type: str | None = None
     fallback_used: bool = False
     execution_audit: dict[str, object] | None = None
+    task_snapshot: dict[str, object] | None = None
+    plan_object: dict[str, object] | None = None
+    verifier_decision: dict[str, object] | None = None
+    specialist_result: dict[str, object] | None = None
+    session_summary: dict[str, object] | None = None
 
 
 class GraphService:
@@ -154,6 +159,11 @@ class GraphService:
             clarification_type=state.get("clarification_type"),
             fallback_used=bool(state.get("fallback_used", False)),
             execution_audit=state.get("execution_audit"),
+            task_snapshot=state.get("task_snapshot"),
+            plan_object=state.get("plan_object"),
+            verifier_decision=state.get("verifier_decision"),
+            specialist_result=state.get("specialist_result"),
+            session_summary=state.get("session_summary"),
         )
 
     def _extract_references(self, state: dict[str, object]) -> dict[str, object] | None:

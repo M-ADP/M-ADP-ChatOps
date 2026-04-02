@@ -19,6 +19,7 @@ class SessionRecord(Base):
     user_id: Mapped[str] = mapped_column(String(255), index=True)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default=SessionStatus.ACTIVE.value)
+    session_summary: Mapped[str | None] = mapped_column(Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -41,6 +42,10 @@ class RequestRecord(Base):
     missing_inputs: Mapped[str | None] = mapped_column(Text(), nullable=True)
     final_response: Mapped[str | None] = mapped_column(Text(), nullable=True)
     resolved_references: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    task_snapshot: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    plan_object: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    verifier_decision: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    specialist_result: Mapped[str | None] = mapped_column(Text(), nullable=True)
     superseded_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -61,3 +66,25 @@ class RequestEventRecord(Base):
     event_type: Mapped[str] = mapped_column(String(64))
     payload: Mapped[str] = mapped_column(Text())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+
+
+class MessageRecord(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=IdGenerator.generate_sonyflake_id)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"), index=True)
+    request_id: Mapped[int | None] = mapped_column(ForeignKey("requests.id"), index=True, nullable=True)
+    user_id: Mapped[str] = mapped_column(String(255), index=True)
+    role: Mapped[str] = mapped_column(String(32))
+    message_type: Mapped[str] = mapped_column(String(32))
+    text: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    task_snapshot: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    plan_object: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    verifier_decision: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    specialist_result: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        onupdate=_utc_now,
+    )
