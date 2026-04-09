@@ -92,6 +92,13 @@ class RequestResponse(BaseModel):
     )
 
 
+class RequestListResponse(BaseModel):
+    items: list[RequestResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class ApproveRequestResponse(BaseModel):
     request_id: int
     status: str

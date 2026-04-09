@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
 
 from chatops.api.dependencies import get_db_session, get_graph_service
 from chatops.app import create_app
@@ -135,4 +138,58 @@ def test_create_request_emits_initial_events(client: TestClient) -> None:
 
     body = stream_response.text
     assert "event: request.created" in body
+    assert "event: context.hydrated" in body
+    assert "event: parsing.completed" in body
     assert "event: approval.required" in body
+
+
+def test_request_stream_follow_waits_for_future_events(client: TestClient, db_session) -> None:
+    session = SessionRepository(db_session).create(user_id="user-1", title=None)
+    request = RequestRepository(db_session).create(
+        session_id=session.id,
+        user_id="user-1",
+        message_text="진행 상황 보여줘",
+        request_id=6101,
+    )
+    request.status = "executing"
+    db_session.commit()
+
+    background_session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autoflush=False,
+        autocommit=False,
+        future=True,
+    )
+
+    def append_event_later() -> None:
+        time.sleep(0.2)
+        worker_session = background_session_factory()
+        try:
+            request_record = RequestRepository(worker_session).get_for_user(request_id=request.id, user_id="user-1")
+            assert request_record is not None
+            request_record.status = "completed"
+            EventService(worker_session).append_event(
+                request_id=request.id,
+                session_id=session.id,
+                event_type="response.delta",
+                payload={"type": "response.delta", "request_id": request.id, "text": "50%"},
+            )
+        finally:
+            worker_session.close()
+
+    worker = threading.Thread(target=append_event_later)
+    worker.start()
+    try:
+        with client.stream(
+            "GET",
+            f"/sessions/{session.id}/requests/{request.id}/stream",
+            headers={"X-User-Id": "user-1"},
+            params={"follow": "true"},
+        ) as response:
+            body = response.read().decode()
+    finally:
+        worker.join(timeout=2)
+
+    assert response.status_code == 200
+    assert "event: response.delta" in body
+    assert '"text": "50%"' in body

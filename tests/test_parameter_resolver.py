@@ -154,6 +154,55 @@ def test_resolve_monitoring_time_range_from_natural_language() -> None:
     assert resolved["query"]["start"] < resolved["query"]["end"]
 
 
+def test_resolve_monitoring_time_range_from_explicit_dates() -> None:
+    entry = RegistryEntry(
+        id="monitoring.get_app_deployment_traffic",
+        source_file="apis/monitoring.yaml",
+        operation_id="get_app_deployment_traffic",
+        path="/monitoring/app-deployment/{project_id}/{app_deployment_name}",
+        method="GET",
+        summary="트래픽 조회",
+        capability="트래픽 조회",
+        usable_in=("query",),
+        operation_kind="read",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=False,
+        risk_level="low",
+        side_effects=(),
+        required_headers=("X-User-Id",),
+        required_inputs={
+            "headers": [],
+            "path": [
+                {"name": "project_id", "required": True},
+                {"name": "app_deployment_name", "required": True},
+            ],
+            "query": [
+                {"name": "start", "required": False},
+                {"name": "end", "required": False},
+            ],
+            "body": None,
+        },
+        preconditions=(),
+        missing_info_questions=(),
+        response_interpretation="트래픽 결과",
+        plan_template=(),
+        examples=(),
+    )
+
+    resolved = ParameterResolverService().resolve(
+        entry,
+        "demo 프로젝트 api-server 앱 2026-03-28부터 2026-03-29까지 트래픽 보여줘",
+    )
+
+    assert resolved["references"] == {
+        "project_name": "demo",
+        "application_name": "api-server",
+    }
+    assert resolved["query"]["start"].startswith("2026-03-28T00:00:00")
+    assert resolved["query"]["end"].startswith("2026-03-29T23:59:59")
+
+
 def test_resolve_project_name_from_natural_language_message() -> None:
     entry = RegistryEntry(
         id="project.create",
@@ -297,6 +346,54 @@ def test_resolve_project_update_from_natural_language_message() -> None:
     }
 
 
+def test_resolve_application_resource_update_from_colloquial_message() -> None:
+    entry = RegistryEntry(
+        id="application.patch_apps_resources",
+        source_file="apis/application.yaml",
+        operation_id=None,
+        path="/apps/resources",
+        method="PATCH",
+        summary="애플리케이션 리소스 변경",
+        capability="애플리케이션 리소스 변경",
+        usable_in=("command",),
+        operation_kind="write",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="medium",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [],
+            "query": [],
+            "body": {"required": True, "required_fields": ["application_id"]},
+        },
+        important_inputs={
+            "path": [],
+            "query": [],
+            "body": ["project_id", "application_id", "max_cpu", "max_memory", "max_disk"],
+        },
+    )
+
+    resolved = ParameterResolverService().resolve(
+        entry,
+        "demo 프로젝트 api 앱 cpu는 한 개반으로, 메모리는 1024메가로, 디스크는 20기가로 늘려줘",
+    )
+
+    assert resolved == {
+        "body": {
+            "max_cpu": 1.5,
+            "max_memory": 1024,
+            "max_disk": 20,
+        },
+        "references": {
+            "project_name": "demo",
+            "application_name": "api",
+        },
+    }
+
+
 def test_resolve_project_delete_from_short_natural_language_message() -> None:
     entry = RegistryEntry(
         id="project.delete",
@@ -333,6 +430,43 @@ def test_resolve_project_delete_from_short_natural_language_message() -> None:
     )
 
     assert resolved == {"references": {"project_name": "demo"}}
+
+
+def test_resolve_project_update_resource_from_natural_language_message() -> None:
+    entry = RegistryEntry(
+        id="project.update_resource",
+        source_file="apis/project.yaml",
+        operation_id="update_project_resource",
+        path="/projects/{project_id}/resource",
+        method="PATCH",
+        summary="프로젝트 리소스 수정",
+        capability="프로젝트 리소스 수정",
+        usable_in=("command",),
+        operation_kind="write",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="medium",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [{"name": "project_id", "required": True}],
+            "query": [],
+            "body": {"required": True, "required_fields": ["max_cpu", "max_memory", "max_disk"]},
+        },
+        important_inputs={"path": [], "query": [], "body": ["max_cpu", "max_memory", "max_disk"]},
+    )
+
+    resolved = ParameterResolverService().resolve(
+        entry,
+        "demo 프로젝트 리소스 변경해줘 cpu는 2 메모리는 4 디스크는 20이야",
+    )
+
+    assert resolved == {
+        "body": {"max_cpu": 2, "max_memory": 4, "max_disk": 20},
+        "references": {"project_name": "demo"},
+    }
 
 
 def test_resolve_project_update_uses_previous_message_context_for_pronoun_reference() -> None:
@@ -375,6 +509,151 @@ def test_resolve_project_update_uses_previous_message_context_for_pronoun_refere
         "body": {"name": "chatops-renamed"},
         "references": {"project_name": "demo"},
     }
+
+
+def test_resolve_application_logs_query_from_natural_language_message() -> None:
+    entry = RegistryEntry(
+        id="application.get_apps_logs",
+        source_file="apis/application.yaml",
+        operation_id=None,
+        path="/apps/logs",
+        method="GET",
+        summary="앱 로그 조회",
+        capability="앱 로그 조회",
+        usable_in=("query",),
+        operation_kind="read",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=False,
+        risk_level="low",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [],
+            "query": [
+                {"name": "project_id", "required": True},
+                {"name": "app_name", "required": True},
+            ],
+            "body": None,
+        },
+        important_inputs={"path": [], "query": ["project_id", "app_name"], "body": []},
+    )
+
+    resolved = ParameterResolverService().resolve(
+        entry,
+        "demo 프로젝트 api-demo 앱 로그 보여줘",
+    )
+
+    assert resolved == {
+        "query": {"app_name": "api-demo"},
+        "references": {"project_name": "demo", "application_name": "api-demo"},
+    }
+
+
+def test_resolve_application_list_query_from_natural_language_message() -> None:
+    entry = RegistryEntry(
+        id="application.get_apps",
+        source_file="apis/application.yaml",
+        operation_id=None,
+        path="/apps",
+        method="GET",
+        summary="앱 목록 조회",
+        capability="앱 목록 조회",
+        usable_in=("query",),
+        operation_kind="read",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=False,
+        risk_level="low",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [],
+            "query": [{"name": "project_id", "required": True}],
+            "body": None,
+        },
+        important_inputs={"path": [], "query": ["project_id"], "body": []},
+    )
+
+    resolved = ParameterResolverService().resolve(
+        entry,
+        "demo 프로젝트 앱 목록 보여줘",
+    )
+
+    assert resolved == {"references": {"project_name": "demo"}}
+
+
+def test_resolve_project_resource_correction_prefers_last_value() -> None:
+    entry = RegistryEntry(
+        id="project.update_resource",
+        source_file="apis/project.yaml",
+        operation_id="update_project_resource",
+        path="/projects/{project_id}/resource",
+        method="PATCH",
+        summary="프로젝트 리소스 수정",
+        capability="프로젝트 리소스 수정",
+        usable_in=("command",),
+        operation_kind="write",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="medium",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [{"name": "project_id", "required": True}],
+            "query": [],
+            "body": {"required": True, "required_fields": ["max_cpu", "max_memory", "max_disk"]},
+        },
+        important_inputs={"path": [], "query": [], "body": ["max_cpu", "max_memory", "max_disk"]},
+    )
+
+    resolved = ParameterResolverService().resolve(
+        entry,
+        "demo 프로젝트 리소스 변경해줘 cpu는 1 아니고 2 메모리는 2 디스크는 20이야",
+    )
+
+    assert resolved["body"]["max_cpu"] == 2
+
+
+def test_resolve_github_branch_correction_prefers_replacement_value() -> None:
+    entry = RegistryEntry(
+        id="application.patch_apps_github",
+        source_file="apis/application.yaml",
+        operation_id=None,
+        path="/apps/github",
+        method="PATCH",
+        summary="앱 깃허브 연결",
+        capability="앱 깃허브 연결",
+        usable_in=("command",),
+        operation_kind="write",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="medium",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [],
+            "query": [],
+            "body": {"required": True, "required_fields": ["owner", "repository", "branch"]},
+        },
+        important_inputs={"path": [], "query": [], "body": ["owner", "repository", "branch"]},
+    )
+
+    resolved = ParameterResolverService().resolve(
+        entry,
+        "demo 프로젝트 api-demo 앱 깃허브 연결해줘 owner는 acme repository는 portal branch는 main 말고 develop이야",
+    )
+
+    assert resolved["references"] == {"project_name": "demo", "application_name": "api-demo"}
+    assert resolved["body"]["owner"] == "acme"
+    assert resolved["body"]["repository"] == "portal"
+    assert resolved["body"]["branch"] == "develop"
 
 
 def test_resolve_project_add_member_from_natural_language_message() -> None:
@@ -563,3 +842,107 @@ def test_entity_memory_resolves_app_from_previous_request() -> None:
     refs = resolved.get("references", {})
     assert refs.get("project_name") == "demo"
     assert refs.get("application_name") == "api-demo"
+
+
+def test_entity_memory_reuses_resolved_ids_from_persistent_state() -> None:
+    entry = RegistryEntry(
+        id="application.patch_apps_resources",
+        source_file="apis/application.yaml",
+        operation_id=None,
+        path="/apps/resources",
+        method="PATCH",
+        summary="애플리케이션 리소스 변경",
+        capability="애플리케이션 리소스 변경",
+        usable_in=("command",),
+        operation_kind="write",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="medium",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [],
+            "query": [],
+            "body": {"required": True, "required_fields": ["application_id"]},
+        },
+        important_inputs={"path": [], "query": [], "body": ["application_id", "max_cpu"]},
+    )
+
+    resolver = ParameterResolverService()
+    resolved = resolver.resolve(
+        entry,
+        "그 앱 cpu는 2로 바꿔줘",
+        session_context={
+            "entity_memory": {
+                "projects": [
+                    {"canonical_name": "demo", "aliases": ["demo"], "resolved_id": 98},
+                ],
+                "applications": [
+                    {
+                        "canonical_name": "api-demo",
+                        "aliases": ["api-demo", "api"],
+                        "project_name": "demo",
+                        "project_id": 98,
+                        "resolved_id": 777,
+                    }
+                ],
+            }
+        },
+    )
+
+    assert resolved["references"] == {"project_name": "demo", "application_name": "api-demo"}
+    assert resolved["resolved_ids"] == {"project_id": 98, "application_id": 777}
+
+
+def test_entity_memory_reuses_target_user_id_from_user_aliases() -> None:
+    entry = RegistryEntry(
+        id="project.remove_member",
+        source_file="apis/project.yaml",
+        operation_id=None,
+        path="/projects/{project_id}/members/{target_user_id}",
+        method="DELETE",
+        summary="프로젝트 멤버 제거",
+        capability="프로젝트 멤버 제거",
+        usable_in=("command",),
+        operation_kind="delete",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="medium",
+        side_effects=(),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [{"name": "project_id", "required": True}],
+            "query": [],
+            "body": None,
+        },
+    )
+
+    resolver = ParameterResolverService()
+    resolved = resolver.resolve(
+        entry,
+        "그 멤버 제거해줘",
+        session_context={
+            "entity_memory": {
+                "projects": [
+                    {"canonical_name": "demo", "aliases": ["demo"], "resolved_id": 98},
+                ],
+                "users": [
+                    {
+                        "canonical_name": "alice",
+                        "nickname": "alice",
+                        "aliases": ["alice", "alice.sre"],
+                        "project_name": "demo",
+                        "project_id": 98,
+                        "resolved_id": 321,
+                    }
+                ],
+            }
+        },
+    )
+
+    assert resolved["references"] == {"project_name": "demo", "target_nickname": "alice"}
+    assert resolved["resolved_ids"] == {"project_id": 98, "target_user_id": 321}

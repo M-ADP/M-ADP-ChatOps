@@ -42,6 +42,8 @@ class StubGraphService:
     verifier_decision: dict[str, object] | None = None
     specialist_result: dict[str, object] | None = None
     session_summary: dict[str, object] | None = None
+    resolved_references: dict[str, object] | None = None
+    resolved_ids: dict[str, object] | None = None
 
     def handle_request(
         self,
@@ -67,6 +69,8 @@ class StubGraphService:
             selected_operation_ids=["project.create"],
             missing_inputs=self.missing_inputs,
             effective_message_text=self.effective_message_text,
+            resolved_references=self.resolved_references,
+            resolved_ids=self.resolved_ids,
             task_snapshot=self.task_snapshot,
             plan_object=self.plan_object,
             verifier_decision=self.verifier_decision,
@@ -96,6 +100,8 @@ class StubGraphService:
             selected_operation_ids=["project.create"],
             missing_inputs=None,
             effective_message_text=self.effective_message_text,
+            resolved_references=self.resolved_references,
+            resolved_ids=self.resolved_ids,
             task_snapshot=self.resumed_task_snapshot or self.task_snapshot,
             plan_object=self.plan_object,
             verifier_decision=self.verifier_decision,
@@ -465,6 +471,60 @@ def test_create_request_persists_runtime_metadata(db_session) -> None:
     assert json.loads(session_record.session_summary)["active_goal"] == "demo 프로젝트 운영"
 
 
+def test_create_request_builds_rich_session_summary_from_resolved_ids(db_session) -> None:
+    app = create_app()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return StubGraphService(
+            status="completed",
+            requires_approval=False,
+            resolved_references={"project_name": "demo", "application_name": "api"},
+            resolved_ids={"project_id": 98, "application_id": 777},
+            plan_object={
+                "goal": "demo 프로젝트에 api 앱 생성",
+                "specialist": "application",
+                "entities": {"project_name": "demo", "application_name": "api"},
+                "candidate_steps": [],
+            },
+            task_snapshot={
+                "title": "애플리케이션 생성",
+                "status": "completed",
+                "approval_state": "completed",
+                "next_actions": ["view_result"],
+            },
+            verifier_decision={"decision": "success", "summary": "검증 결과 문제가 없습니다."},
+        )
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={"title": "runtime"},
+        ).json()
+
+        created = client.post(
+            f"/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "demo 프로젝트에 api 앱 만들어줘"},
+        )
+
+    app.dependency_overrides.clear()
+
+    session_record = SessionRepository(db_session).get_for_user(session["session_id"], "user-1")
+
+    assert created.status_code == 202
+    assert session_record is not None
+    summary = json.loads(session_record.session_summary)
+    assert summary["recent_entities"]["projects"][0]["resolved_id"] == 98
+    assert summary["recent_entities"]["applications"][0]["resolved_id"] == 777
+
+
 def test_create_request_returns_missing_inputs_when_command_needs_more_values(db_session) -> None:
     app = create_app()
 
@@ -666,7 +726,7 @@ def test_create_request_passes_last_effective_message_text_for_multi_turn_follow
         "last_resolved_references": None,
         "session_summary": {
             "active_goal": "이름은 demo야 cpu는 1이야",
-            "recent_entities": {},
+            "recent_entities": {"projects": [], "applications": [], "users": []},
             "last_completed_task": None,
             "last_verifier_decision": None,
             "updated_at": stub_graph_service.last_session_context["session_summary"]["updated_at"],
@@ -987,6 +1047,107 @@ def test_reject_request_emits_rejected_event(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "rejected"
     assert "event: approval.rejected" in stream_response.text
+
+
+def test_list_requests_returns_session_requests_in_desc_order(client: TestClient, db_session) -> None:
+    session = SessionRepository(db_session).create(user_id="user-1", title="운영")
+    repo = RequestRepository(db_session)
+    first = repo.create(session_id=session.id, user_id="user-1", message_text="첫 요청", request_id=5101, request_type="query")
+    first.status = "completed"
+    second = repo.create(session_id=session.id, user_id="user-1", message_text="둘째 요청", request_id=5102, request_type="command")
+    second.status = "pending_approval"
+    db_session.commit()
+
+    response = client.get(
+        f"/sessions/{session.id}/requests",
+        headers={"X-User-Id": "user-1"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert [item["request_id"] for item in body["items"]] == [5102, 5101]
+
+
+def test_list_requests_filters_by_query_text(client: TestClient, db_session) -> None:
+    session = SessionRepository(db_session).create(user_id="user-1", title="운영")
+    repo = RequestRepository(db_session)
+    first = repo.create(session_id=session.id, user_id="user-1", message_text="cpu 올려줘", request_id=5201)
+    first.status = "completed"
+    second = repo.create(session_id=session.id, user_id="user-1", message_text="메모리 확인", request_id=5202)
+    second.status = "completed"
+    db_session.commit()
+
+    response = client.get(
+        f"/sessions/{session.id}/requests",
+        headers={"X-User-Id": "user-1"},
+        params={"q": "cpu"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert [item["request_id"] for item in body["items"]] == [5201]
+
+
+def test_list_request_events_returns_timeline_for_request(client: TestClient, db_session) -> None:
+    session = SessionRepository(db_session).create(user_id="user-1", title="운영")
+    request = RequestRepository(db_session).create(
+        session_id=session.id,
+        user_id="user-1",
+        message_text="프로젝트 생성해줘",
+        request_id=5301,
+    )
+    event_repo = RequestEventRepository(db_session)
+    event_repo.append(
+        request_id=request.id,
+        session_id=session.id,
+        sequence=1,
+        event_type="request.created",
+        payload='{"type":"request.created","phase":"request"}',
+    )
+    event_repo.append(
+        request_id=request.id,
+        session_id=session.id,
+        sequence=2,
+        event_type="approval.required",
+        payload='{"type":"approval.required","phase":"approval"}',
+    )
+    db_session.commit()
+
+    response = client.get(
+        f"/sessions/{session.id}/requests/{request.id}/events",
+        headers={"X-User-Id": "user-1"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert [item["sequence"] for item in body["items"]] == [1, 2]
+    assert body["items"][1]["type"] == "approval.required"
+
+
+def test_request_search_finds_message_and_response_text(client: TestClient, db_session) -> None:
+    session = SessionRepository(db_session).create(user_id="user-1", title="운영")
+    repo = RequestRepository(db_session)
+    first = repo.create(session_id=session.id, user_id="user-1", message_text="프로젝트 로그 보여줘", request_id=5201, request_type="query")
+    first.status = "completed"
+    first.final_response = "로그를 조회했습니다."
+    second = repo.create(session_id=session.id, user_id="user-1", message_text="프로젝트 생성해줘", request_id=5202, request_type="command")
+    second.status = "completed"
+    second.final_response = "프로젝트를 생성했습니다."
+    db_session.commit()
+
+    response = client.get(
+        "/requests/search",
+        headers={"X-User-Id": "user-1"},
+        params={"query": "로그"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["request_id"] == 5201
 
 
 def test_create_request_emits_task_snapshot_in_events(db_session) -> None:

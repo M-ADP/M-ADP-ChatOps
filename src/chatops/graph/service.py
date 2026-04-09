@@ -29,6 +29,7 @@ class GraphResult:
     missing_inputs: list[str] | None = None
     effective_message_text: str | None = None
     resolved_references: dict[str, object] | None = None
+    resolved_ids: dict[str, object] | None = None
     is_ambiguous: bool = False
     ambiguity_candidates: list[dict[str, object]] | None = None
     risk_level: str | None = None
@@ -151,6 +152,7 @@ class GraphService:
             missing_inputs=list(state.get("missing_inputs", [])) or None,
             effective_message_text=state.get("effective_message_text"),
             resolved_references=self._extract_references(state),
+            resolved_ids=self._extract_resolved_ids(state),
             is_ambiguous=bool(state.get("is_ambiguous", False)),
             ambiguity_candidates=state.get("ambiguity_candidates"),
             risk_level=state.get("risk_level"),
@@ -172,6 +174,14 @@ class GraphService:
             refs = resolved_inputs.get("references")
             if isinstance(refs, dict) and refs:
                 return dict(refs)
+        return None
+
+    def _extract_resolved_ids(self, state: dict[str, object]) -> dict[str, object] | None:
+        resolved_inputs = state.get("resolved_inputs")
+        if isinstance(resolved_inputs, dict):
+            resolved_ids = resolved_inputs.get("resolved_ids")
+            if isinstance(resolved_ids, dict) and resolved_ids:
+                return dict(resolved_ids)
         return None
 
     def _thread_config(self, request_id: int) -> dict[str, object]:

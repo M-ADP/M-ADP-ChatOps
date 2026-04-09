@@ -4,7 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from chatops.api.dependencies import get_auth_context, get_db_session, get_graph_service
-from chatops.api.routers.requests import create_request as create_request_resource
+from chatops.api.routers.requests import (
+    _build_request_response,
+    create_request as create_request_resource,
+)
 from chatops.db.repositories import MessageRepository, RequestRepository, SessionRepository
 from chatops.graph.service import GraphService
 from chatops.schemas.auth import AuthContext
@@ -13,7 +16,7 @@ from chatops.schemas.messages import (
     CreateSessionMessageResponse,
     SessionMessagesPageResponse,
 )
-from chatops.schemas.requests import CreateRequestRequest
+from chatops.schemas.requests import CreateRequestRequest, RequestListResponse
 from chatops.schemas.sessions import (
     CreateSessionRequest,
     SessionDetailResponse,
@@ -135,6 +138,33 @@ def get_session_messages(
         messages,
         limit=limit,
         before=before,
+    )
+
+
+@router.get("/{session_id}/history", response_model=RequestListResponse)
+def get_session_history(
+    session_id: int,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    auth: AuthContext = Depends(get_auth_context),
+    db_session: Session = Depends(get_db_session),
+) -> RequestListResponse:
+    record = SessionRepository(db_session).get_for_user(session_id=session_id, user_id=auth.user_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    items, total = RequestRepository(db_session).list_page_for_session(
+        session_id=session_id,
+        user_id=auth.user_id,
+        limit=limit,
+        offset=offset,
+        ascending=True,
+    )
+    return RequestListResponse(
+        items=[_build_request_response(item, item.message_text) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 

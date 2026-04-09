@@ -261,6 +261,25 @@ def test_get_session_messages_paginates_older_history(client: TestClient, db_ses
     assert older.json()["next_cursor"] is None
 
 
+def test_session_history_returns_requests_in_chronological_order(client: TestClient, db_session) -> None:
+    session = SessionRepository(db_session).create(user_id="user-1", title="운영")
+    repo = RequestRepository(db_session)
+    first = repo.create(session_id=session.id, user_id="user-1", message_text="첫 요청", request_id=5301, request_type="query")
+    first.status = "completed"
+    second = repo.create(session_id=session.id, user_id="user-1", message_text="둘째 요청", request_id=5302, request_type="command")
+    second.status = "failed"
+    db_session.commit()
+
+    response = client.get(
+        f"/sessions/{session.id}/history",
+        headers={"X-User-Id": "user-1"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["request_id"] for item in body["items"]] == [5301, 5302]
+
+
 def test_post_session_message_returns_user_and_assistant_messages(db_session) -> None:
     app = create_app()
     task_snapshot = {

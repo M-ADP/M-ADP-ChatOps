@@ -23,11 +23,17 @@ def test_session_summary_service_builds_summary_from_runtime_metadata() -> None:
         },
         task_snapshot={"title": "애플리케이션 생성", "status": "completed"},
         verifier_decision={"decision": "success"},
+        resolved_references={"project_name": "demo", "application_name": "api"},
+        resolved_ids={"project_id": 98, "application_id": 777},
         now=datetime(2026, 4, 3, tzinfo=timezone.utc),
     )
 
     assert summary["active_goal"] == "demo 프로젝트에 api 앱 생성"
-    assert summary["recent_entities"]["project_name"] == "demo"
+    assert summary["recent_entities"]["projects"][0]["canonical_name"] == "demo"
+    assert summary["recent_entities"]["projects"][0]["resolved_id"] == 98
+    assert summary["recent_entities"]["applications"][0]["canonical_name"] == "api"
+    assert summary["recent_entities"]["applications"][0]["project_id"] == 98
+    assert summary["recent_entities"]["applications"][0]["resolved_id"] == 777
     assert summary["last_completed_task"] == "애플리케이션 생성"
     assert summary["last_verifier_decision"] == "success"
 
@@ -38,13 +44,40 @@ def test_entity_memory_service_merges_recent_entities_into_session_context() -> 
     context = service.merge_into_session_context(
         session_context={"last_request_status": "completed"},
         session_summary={
-            "recent_entities": {"project_name": "demo", "application_name": "api"},
+            "recent_entities": {
+                "projects": [
+                    {"canonical_name": "demo", "aliases": ["demo"], "resolved_id": 98},
+                ],
+                "applications": [
+                    {
+                        "canonical_name": "api",
+                        "aliases": ["api"],
+                        "project_name": "demo",
+                        "project_id": 98,
+                        "resolved_id": 777,
+                    },
+                ],
+            },
         },
     )
 
     assert context["last_request_status"] == "completed"
-    assert context["entity_memory"]["project_name"] == "demo"
-    assert context["entity_memory"]["application_name"] == "api"
+    assert context["entity_memory"]["projects"][0]["canonical_name"] == "demo"
+    assert context["entity_memory"]["applications"][0]["resolved_id"] == 777
+
+
+def test_entity_memory_service_normalizes_legacy_recent_entities_shape() -> None:
+    service = EntityMemoryService()
+
+    context = service.merge_into_session_context(
+        session_context=None,
+        session_summary={
+            "recent_entities": {"project_name": "demo", "application_name": "api"},
+        },
+    )
+
+    assert context["entity_memory"]["projects"][0]["canonical_name"] == "demo"
+    assert context["entity_memory"]["applications"][0]["canonical_name"] == "api"
 
 
 def test_create_request_passes_session_summary_memory_into_graph_context(db_session) -> None:
@@ -99,7 +132,20 @@ def test_create_request_passes_session_summary_memory_into_graph_context(db_sess
     session.session_summary = json.dumps(
         {
             "active_goal": "demo 프로젝트 운영",
-            "recent_entities": {"project_name": "demo", "application_name": "api"},
+            "recent_entities": {
+                "projects": [
+                    {"canonical_name": "demo", "aliases": ["demo"], "resolved_id": 98},
+                ],
+                "applications": [
+                    {
+                        "canonical_name": "api",
+                        "aliases": ["api", "api-demo"],
+                        "project_name": "demo",
+                        "project_id": 98,
+                        "resolved_id": 777,
+                    },
+                ],
+            },
             "last_completed_task": "앱 상태 조회",
             "last_verifier_decision": "success",
             "updated_at": "2026-04-03T00:00:00Z",
@@ -120,4 +166,5 @@ def test_create_request_passes_session_summary_memory_into_graph_context(db_sess
     assert response.status_code == 202
     assert graph.last_session_context is not None
     assert graph.last_session_context["session_summary"]["active_goal"] == "demo 프로젝트 운영"
-    assert graph.last_session_context["entity_memory"]["project_name"] == "demo"
+    assert graph.last_session_context["entity_memory"]["projects"][0]["resolved_id"] == 98
+    assert graph.last_session_context["entity_memory"]["applications"][0]["aliases"] == ["api", "api-demo"]

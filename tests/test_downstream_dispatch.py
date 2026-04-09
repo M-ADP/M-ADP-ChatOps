@@ -114,8 +114,8 @@ class RecordingProjectClient:
         return {
             "summary": "demo 프로젝트 멤버: alice(OWNER), bob(MEMBER)",
             "items": [
-                {"username": "alice", "role": "OWNER"},
-                {"username": "bob", "role": "MEMBER"},
+                {"user_id": 321, "nickname": "alice", "username": "alice.sre", "role": "OWNER"},
+                {"user_id": 654, "nickname": "bob", "username": "bob.ops", "role": "MEMBER"},
             ],
         }
 
@@ -876,9 +876,54 @@ async def test_project_member_operations_dispatch_with_resolved_nickname(
     )
 
     assert result["success"] is True
-    assert user_client.calls == [("get_profile_by_nickname", {"nickname": "alice"})]
-    assert project_client.calls[0] == ("list_projects", {"user_id": "1", "role": "admin"})
-    assert project_client.calls[1] == expected_call
+    assert user_client.calls == []
+    assert project_client.calls == [
+        ("list_projects", {"user_id": "1", "role": "admin"}),
+        ("list_project_members", {"user_id": "1", "role": "admin", "project_id": 98}),
+        expected_call,
+    ]
+
+
+@dataclass
+class ExplodingUserClient:
+    async def get_profile_by_nickname(self, *, nickname: str) -> dict[str, object]:
+        del nickname
+        raise AssertionError("fallback user lookup should not run")
+
+
+@pytest.mark.anyio
+async def test_project_member_dispatch_resolves_target_user_from_project_members() -> None:
+    project_client = RecordingProjectClient()
+    user_client = ExplodingUserClient()
+    dispatcher = DownstreamDispatcher(
+        project_client=project_client,
+        application_client=RecordingApplicationClient(),
+        monitoring_client=RecordingMonitoringClient(),
+        user_client=user_client,
+    )
+
+    result = await dispatcher.execute_command(
+        _entry(
+            entry_id="project.remove_member",
+            method="DELETE",
+            path="/projects/{project_id}/members/{target_user_id}",
+            source_file="apis/project.yaml",
+            operation_kind="delete",
+        ),
+        user_id="1",
+        user_role="admin",
+        resolved_inputs={"references": {"project_name": "demo", "target_nickname": "alice.sre"}},
+    )
+
+    assert result["success"] is True
+    assert project_client.calls == [
+        ("list_projects", {"user_id": "1", "role": "admin"}),
+        ("list_project_members", {"user_id": "1", "role": "admin", "project_id": 98}),
+        (
+            "remove_project_member",
+            {"user_id": "1", "role": "admin", "project_id": 98, "target_user_id": 321},
+        ),
+    ]
 
 
 @pytest.mark.anyio

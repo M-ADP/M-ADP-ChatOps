@@ -45,6 +45,26 @@ class ProjectRenameSlots(SlotModel):
     name: str | None = None
 
 
+class ProjectReferenceSlots(SlotModel):
+    project_name: str | None = None
+
+
+class ProjectResourceSlots(SlotModel):
+    project_name: str | None = None
+    max_cpu: float | int | None = None
+    max_memory: float | int | None = None
+    max_disk: float | int | None = None
+
+    @field_validator("max_cpu", "max_memory", "max_disk")
+    @classmethod
+    def _require_positive_numeric(cls, value: float | int | None):
+        if value is None:
+            return value
+        if value <= 0:
+            raise ValueError("resource values must be positive")
+        return value
+
+
 class MemberMutationSlots(SlotModel):
     project_name: str | None = None
     target_nickname: str | None = None
@@ -65,6 +85,28 @@ class ApplicationGithubSlots(SlotModel):
     owner: str | None = None
     repository: str | None = None
     branch: str | None = None
+
+
+class ApplicationReferenceSlots(SlotModel):
+    project_name: str | None = None
+    application_name: str | None = None
+
+
+class ApplicationResourceSlots(SlotModel):
+    project_name: str | None = None
+    application_name: str | None = None
+    max_cpu: float | int | None = None
+    max_memory: float | int | None = None
+    max_disk: float | int | None = None
+
+    @field_validator("max_cpu", "max_memory", "max_disk")
+    @classmethod
+    def _require_positive_numeric(cls, value: float | int | None):
+        if value is None:
+            return value
+        if value <= 0:
+            raise ValueError("resource values must be positive")
+        return value
 
 
 class MonitoringTrafficSlots(SlotModel):

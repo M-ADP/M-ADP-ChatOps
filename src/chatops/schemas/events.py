@@ -11,3 +11,10 @@ class RequestEventResponse(BaseModel):
     type: str
     data: dict[str, Any]
     timestamp: datetime
+
+
+class RequestEventListResponse(BaseModel):
+    items: list[RequestEventResponse]
+    total: int
+    limit: int
+    offset: int

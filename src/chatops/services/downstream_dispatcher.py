@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from chatops.services.name_matcher import match_name
 from chatops.services.registry import RegistryEntry
+from chatops.services.user_matcher import match_user
 
 
 AsyncHandler = Callable[[str, str | None, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -296,7 +298,12 @@ class DownstreamDispatcher:
             user_role=user_role,
             resolved_inputs=resolved_inputs,
         )
-        target_user_id = await self._resolve_target_user_id(resolved_inputs=resolved_inputs)
+        target_user_id = await self._resolve_target_user_id(
+            user_id=user_id,
+            user_role=user_role,
+            project_id=project_id,
+            resolved_inputs=resolved_inputs,
+        )
         return await self.project_client.add_project_member(
             user_id=user_id,
             role=user_role,
@@ -315,7 +322,12 @@ class DownstreamDispatcher:
             user_role=user_role,
             resolved_inputs=resolved_inputs,
         )
-        target_user_id = await self._resolve_target_user_id(resolved_inputs=resolved_inputs)
+        target_user_id = await self._resolve_target_user_id(
+            user_id=user_id,
+            user_role=user_role,
+            project_id=project_id,
+            resolved_inputs=resolved_inputs,
+        )
         return await self.project_client.remove_project_member(
             user_id=user_id,
             role=user_role,
@@ -334,7 +346,12 @@ class DownstreamDispatcher:
             user_role=user_role,
             resolved_inputs=resolved_inputs,
         )
-        target_user_id = await self._resolve_target_user_id(resolved_inputs=resolved_inputs)
+        target_user_id = await self._resolve_target_user_id(
+            user_id=user_id,
+            user_role=user_role,
+            project_id=project_id,
+            resolved_inputs=resolved_inputs,
+        )
         return await self.project_client.transfer_project_ownership(
             user_id=user_id,
             role=user_role,
@@ -575,22 +592,18 @@ class DownstreamDispatcher:
         if projects.get("success") is False:
             raise EntityResolutionError(str(projects.get("summary", "프로젝트 목록을 조회하지 못했습니다.")))
         items = projects.get("items", [])
+        names_by_value: dict[str, int] = {}
         for item in items:
             if not isinstance(item, dict):
                 continue
-            if str(item.get("name")) == str(project_name):
-                project_id = item.get("id")
-                if project_id is not None:
-                    return int(project_id)
-        available_names = [
-            str(item.get("name", ""))
-            for item in items
-            if isinstance(item, dict) and item.get("name") is not None
-        ]
-        similar_names = self._find_similar_names(str(project_name), available_names)
+            if item.get("name") is not None and item.get("id") is not None:
+                names_by_value[str(item["name"])] = int(item["id"])
+        matched = match_name(str(project_name), list(names_by_value.keys()))
+        if matched.matched_name is not None:
+            return names_by_value[matched.matched_name]
         message = f"프로젝트 '{project_name}'을(를) 찾지 못했습니다."
-        if similar_names:
-            message += "\n비슷한 프로젝트: " + ", ".join(similar_names)
+        if matched.suggestions:
+            message += "\n비슷한 프로젝트: " + ", ".join(matched.suggestions)
         raise EntityResolutionError(message)
 
     async def _resolve_application_id(
@@ -652,6 +665,9 @@ class DownstreamDispatcher:
     async def _resolve_target_user_id(
         self,
         *,
+        user_id: str,
+        user_role: str | None,
+        project_id: int,
         resolved_inputs: dict[str, Any],
     ) -> int:
         resolved_ids = resolved_inputs.get("resolved_ids", {})
@@ -666,14 +682,26 @@ class DownstreamDispatcher:
             if "target_user_id" in body_values:
                 return int(body_values["target_user_id"])
             raise EntityResolutionError("대상 사용자를 찾지 못했습니다.")
+        suggestions: list[str] = []
+        if hasattr(self.project_client, "list_project_members"):
+            members = await self.project_client.list_project_members(
+                user_id=user_id,
+                role=user_role,
+                project_id=project_id,
+            )
+            if members.get("success") is not False:
+                matched = match_user(str(nickname), members.get("items", []))
+                if matched.user_id is not None:
+                    return matched.user_id
+                suggestions = matched.suggestions
         if self.user_client is None:
             raise EntityResolutionError("대상 사용자를 찾을 수 없습니다.")
         profile = await self.user_client.get_profile_by_nickname(nickname=str(nickname))
         if profile.get("success") is False:
-            raise EntityResolutionError(str(profile.get("summary", "대상 사용자를 찾지 못했습니다.")))
+            raise EntityResolutionError(self._user_not_found_message(str(nickname), suggestions))
         data = profile.get("data")
         if not isinstance(data, dict) or data.get("id") is None:
-            raise EntityResolutionError(f"사용자 '{nickname}'을(를) 찾지 못했습니다.")
+            raise EntityResolutionError(self._user_not_found_message(str(nickname), suggestions))
         return int(data["id"])
 
     async def _resolve_application_id_from_list(
@@ -692,22 +720,20 @@ class DownstreamDispatcher:
         if apps.get("success") is False:
             raise EntityResolutionError(str(apps.get("summary", "앱 목록을 조회하지 못했습니다.")))
         items = apps.get("items", [])
+        names_by_value: dict[str, int] = {}
         for item in items:
             if not isinstance(item, dict):
                 continue
-            if str(item.get("name")) == application_name:
-                application_id = item.get("id") or item.get("appId") or item.get("app_id")
-                if application_id is not None:
-                    return int(application_id)
-        available_names = [
-            str(item.get("name", ""))
-            for item in items
-            if isinstance(item, dict) and item.get("name") is not None
-        ]
-        similar_names = self._find_similar_names(application_name, available_names)
+            name = item.get("name")
+            application_id = item.get("id") or item.get("appId") or item.get("app_id")
+            if name is not None and application_id is not None:
+                names_by_value[str(name)] = int(application_id)
+        matched = match_name(application_name, list(names_by_value.keys()))
+        if matched.matched_name is not None:
+            return names_by_value[matched.matched_name]
         message = f"앱 '{application_name}'을(를) 찾지 못했습니다."
-        if similar_names:
-            message += "\n비슷한 앱: " + ", ".join(similar_names)
+        if matched.suggestions:
+            message += "\n비슷한 앱: " + ", ".join(matched.suggestions)
         raise EntityResolutionError(message)
 
     async def _apply_application_query_fallback(
@@ -752,12 +778,8 @@ class DownstreamDispatcher:
         if apps.get("success") is False:
             return []
         items = apps.get("items", [])
-        available_names = [
-            str(item.get("name", ""))
-            for item in items
-            if isinstance(item, dict) and item.get("name") is not None
-        ]
-        return self._find_similar_names(application_name, available_names)
+        available_names = [str(item.get("name", "")) for item in items if isinstance(item, dict) and item.get("name") is not None]
+        return match_name(application_name, available_names).suggestions
 
     @staticmethod
     def _find_similar_names(target: str, names: list[str], limit: int = 3) -> list[str]:
@@ -773,6 +795,13 @@ class DownstreamDispatcher:
                 scored.append((name, common))
         scored.sort(key=lambda item: (-item[1], item[0]))
         return [name for name, _score in scored[:limit]]
+
+    @staticmethod
+    def _user_not_found_message(nickname: str, suggestions: list[str]) -> str:
+        message = f"사용자 '{nickname}'을(를) 찾지 못했습니다."
+        if suggestions:
+            message += "\n비슷한 사용자: " + ", ".join(suggestions)
+        return message
 
     @staticmethod
     def _mark_fallback_used(resolved_inputs: dict[str, Any]) -> None:

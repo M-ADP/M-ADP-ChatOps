@@ -4,22 +4,24 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from chatops.api.dependencies import get_auth_context, get_db_session, get_graph_service
 from chatops.common.config.settings import get_app_config
 from chatops.db.models import RequestRecord
-from chatops.db.repositories import MessageRepository, RequestRepository, SessionRepository
+from chatops.db.repositories import MessageRepository, RequestEventRepository, RequestRepository, SessionRepository
 from chatops.domain.enums import RequestStatus
 from chatops.graph.service import GraphService
 from chatops.schemas.auth import AuthContext
+from chatops.schemas.events import RequestEventListResponse, RequestEventResponse
 from chatops.schemas.requests import (
     ApproveRequestRequest,
     ApproveRequestResponse,
     CreateRequestRequest,
     RejectRequestResponse,
+    RequestListResponse,
     RequestResponse,
 )
 from chatops.services.approval_intent import ApprovalIntent, detect_approval_intent
@@ -120,6 +122,18 @@ def _build_request_response(record: RequestRecord, message_text: str) -> Request
     )
 
 
+def _build_event_response(record) -> RequestEventResponse:
+    payload = _load_json_field(record.payload)
+    data = payload if isinstance(payload, dict) else {}
+    event_type = data.get("type") if isinstance(data.get("type"), str) else record.event_type
+    return RequestEventResponse(
+        sequence=record.sequence,
+        type=event_type,
+        data=data,
+        timestamp=record.created_at,
+    )
+
+
 def _append_user_message(
     db_session: Session,
     *,
@@ -170,6 +184,40 @@ def _load_request_or_404(db_session: Session, request_id: int, user_id: str) -> 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
     return record
+
+
+def _load_session_summary(
+    db_session: Session,
+    *,
+    session_id: int,
+    user_id: str,
+) -> dict[str, object] | None:
+    record = SessionRepository(db_session).get_for_user(session_id=session_id, user_id=user_id)
+    if record is None:
+        return None
+    return session_summary_service.load(record.session_summary)
+
+
+def _build_session_summary(
+    *,
+    db_session: Session,
+    session_id: int,
+    user_id: str,
+    message_text: str,
+    graph_result,
+) -> dict[str, object] | None:
+    if graph_result.session_summary:
+        return graph_result.session_summary
+    previous_summary = _load_session_summary(db_session, session_id=session_id, user_id=user_id)
+    return session_summary_service.build(
+        message_text=message_text,
+        plan_object=graph_result.plan_object,
+        task_snapshot=graph_result.task_snapshot,
+        verifier_decision=graph_result.verifier_decision,
+        resolved_references=graph_result.resolved_references,
+        resolved_ids=graph_result.resolved_ids,
+        previous_summary=previous_summary,
+    )
 
 
 def _expects_exact_name_confirmation(record: RequestRecord) -> bool:
@@ -235,9 +283,299 @@ def _build_graph_audit_context(graph_result, user_id: str) -> dict[str, object]:
     return audit_context
 
 
+def _append_structured_event(
+    event_service: EventService,
+    *,
+    request_id: int,
+    session_id: int,
+    event_type: str,
+    phase: str,
+    step: str,
+    message: str,
+    status_value: str | None = None,
+    progress: int | None = None,
+    payload: dict[str, object] | None = None,
+    audit_context: dict[str, object] | None = None,
+) -> None:
+    event_payload: dict[str, object] = {
+        "type": event_type,
+        "phase": phase,
+        "step": step,
+        "message": message,
+        "request_id": request_id,
+        "session_id": session_id,
+    }
+    if status_value is not None:
+        event_payload["status"] = status_value
+    if progress is not None:
+        event_payload["progress"] = progress
+    if payload:
+        event_payload.update({key: value for key, value in payload.items() if value is not None})
+
+    if audit_context is None:
+        event_service.append_event(
+            request_id=request_id,
+            session_id=session_id,
+            event_type=event_type,
+            payload=event_payload,
+        )
+        return
+
+    event_service.append_audit_event(
+        request_id=request_id,
+        session_id=session_id,
+        event_type=event_type,
+        payload=event_payload,
+        audit_context=audit_context,
+    )
+
+
+def _append_request_lifecycle_events(
+    event_service: EventService,
+    *,
+    record: RequestRecord,
+    graph_result,
+    session_context: dict[str, object] | None,
+    audit_context: dict[str, object],
+) -> None:
+    entity_memory = session_context.get("entity_memory") if isinstance(session_context, dict) else {}
+    request_trail = session_context.get("request_trail") if isinstance(session_context, dict) else []
+    projects = entity_memory.get("projects", []) if isinstance(entity_memory, dict) else []
+    applications = entity_memory.get("applications", []) if isinstance(entity_memory, dict) else []
+    users = entity_memory.get("users", []) if isinstance(entity_memory, dict) else []
+
+    _append_structured_event(
+        event_service,
+        request_id=record.id,
+        session_id=record.session_id,
+        event_type="request.created",
+        phase="request",
+        step="created",
+        message="요청을 접수했습니다.",
+        status_value=record.status,
+        progress=10,
+        payload={
+            "request_type": record.request_type,
+            "task": _load_task_snapshot(record.task_snapshot),
+        },
+    )
+    _append_structured_event(
+        event_service,
+        request_id=record.id,
+        session_id=record.session_id,
+        event_type="context.hydrated",
+        phase="planning",
+        step="context_hydrated",
+        message="세션 문맥을 반영했습니다.",
+        status_value=record.status,
+        progress=20,
+        payload={
+            "project_context_count": len(projects) if isinstance(projects, list) else 0,
+            "application_context_count": len(applications) if isinstance(applications, list) else 0,
+            "user_context_count": len(users) if isinstance(users, list) else 0,
+            "request_trail_count": len(request_trail) if isinstance(request_trail, list) else 0,
+            "task": _load_task_snapshot(record.task_snapshot),
+        },
+    )
+    _append_structured_event(
+        event_service,
+        request_id=record.id,
+        session_id=record.session_id,
+        event_type="parsing.completed",
+        phase="planning",
+        step="parsed",
+        message="요청 해석을 마쳤습니다.",
+        status_value=record.status,
+        progress=40,
+        payload={
+            "request_type": record.request_type,
+            "intent": graph_result.intent,
+            "selected_operation_ids": graph_result.selected_operation_ids,
+            "resolved_references": graph_result.resolved_references,
+            "missing_inputs": _load_missing_inputs(record.missing_inputs),
+            "task": _load_task_snapshot(record.task_snapshot),
+        },
+        audit_context=audit_context,
+    )
+
+    if record.status == RequestStatus.PENDING_APPROVAL.value:
+        _append_structured_event(
+            event_service,
+            request_id=record.id,
+            session_id=record.session_id,
+            event_type="approval.required",
+            phase="approval",
+            step="required",
+            message="승인이 필요합니다.",
+            status_value=record.status,
+            progress=80,
+            payload={
+                "final_response": record.final_response,
+                "missing_inputs": _load_missing_inputs(record.missing_inputs),
+                "task": _load_task_snapshot(record.task_snapshot),
+            },
+            audit_context=audit_context,
+        )
+        return
+
+    if record.status == RequestStatus.AMBIGUOUS.value:
+        _append_structured_event(
+            event_service,
+            request_id=record.id,
+            session_id=record.session_id,
+            event_type="request.ambiguous",
+            phase="planning",
+            step="ambiguous",
+            message="후보가 여러 개라 추가 확인이 필요합니다.",
+            status_value=record.status,
+            progress=70,
+            payload={"final_response": record.final_response, "task": _load_task_snapshot(record.task_snapshot)},
+            audit_context=audit_context,
+        )
+        return
+
+    if record.status == RequestStatus.INPUT_REQUIRED.value:
+        _append_structured_event(
+            event_service,
+            request_id=record.id,
+            session_id=record.session_id,
+            event_type="request.input_required",
+            phase="planning",
+            step="input_required",
+            message="추가 입력이 필요합니다.",
+            status_value=record.status,
+            progress=70,
+            payload={
+                "final_response": record.final_response,
+                "missing_inputs": _load_missing_inputs(record.missing_inputs),
+                "task": _load_task_snapshot(record.task_snapshot),
+            },
+            audit_context=audit_context,
+        )
+        return
+
+    terminal_event_type = "request.failed" if record.status == RequestStatus.FAILED.value else "response.completed"
+    terminal_message = "요청 처리에 실패했습니다." if record.status == RequestStatus.FAILED.value else "응답 생성을 마쳤습니다."
+    _append_structured_event(
+        event_service,
+        request_id=record.id,
+        session_id=record.session_id,
+        event_type=terminal_event_type,
+        phase="response",
+        step="completed" if terminal_event_type == "response.completed" else "failed",
+        message=terminal_message,
+        status_value=record.status,
+        progress=100,
+        payload={"final_response": record.final_response, "task": _load_task_snapshot(record.task_snapshot)},
+        audit_context=audit_context,
+    )
+
+
+def _append_execution_started_event(event_service: EventService, record: RequestRecord) -> None:
+    _append_structured_event(
+        event_service,
+        request_id=record.id,
+        session_id=record.session_id,
+        event_type="execution.started",
+        phase="execution",
+        step="started",
+        message="승인된 요청 실행을 시작했습니다.",
+        status_value=RequestStatus.EXECUTING.value,
+        progress=85,
+    )
+
+
+def _append_execution_terminal_event(
+    event_service: EventService,
+    *,
+    record: RequestRecord,
+    graph_result,
+    user_id: str,
+) -> None:
+    audit_context = _build_graph_audit_context(graph_result, user_id)
+    event_type = "execution.completed" if record.status == RequestStatus.COMPLETED.value else "execution.failed"
+    _append_structured_event(
+        event_service,
+        request_id=record.id,
+        session_id=record.session_id,
+        event_type=event_type,
+        phase="execution",
+        step="completed" if event_type == "execution.completed" else "failed",
+        message="요청 실행을 마쳤습니다." if event_type == "execution.completed" else "요청 실행에 실패했습니다.",
+        status_value=record.status,
+        progress=100,
+        payload={"final_response": record.final_response, "task": _load_task_snapshot(record.task_snapshot)},
+        audit_context=audit_context,
+    )
+
+
 # ──────────────────────────────────────────────────
 # Endpoints
 # ──────────────────────────────────────────────────
+
+@router.get("", response_model=RequestListResponse)
+def list_requests(
+    session_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    request_status: str | None = Query(default=None, alias="status"),
+    request_type_filter: str | None = Query(default=None, alias="request_type"),
+    query_text: str | None = Query(default=None, alias="q"),
+    auth: AuthContext = Depends(get_auth_context),
+    db_session: Session = Depends(get_db_session),
+) -> RequestListResponse:
+    session_record = SessionRepository(db_session).get_for_user(session_id=session_id, user_id=auth.user_id)
+    if session_record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    items, total = RequestRepository(db_session).list_page_for_session(
+        session_id=session_id,
+        user_id=auth.user_id,
+        limit=limit,
+        offset=offset,
+        status=request_status,
+        request_type=request_type_filter,
+        query_text=query_text,
+    )
+    return RequestListResponse(
+        items=[_build_request_response(record, record.message_text) for record in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/{request_id}/events", response_model=RequestEventListResponse)
+def list_request_events(
+    session_id: int,
+    request_id: int,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    event_type: str | None = Query(default=None),
+    auth: AuthContext = Depends(get_auth_context),
+    db_session: Session = Depends(get_db_session),
+) -> RequestEventListResponse:
+    session_record = SessionRepository(db_session).get_for_user(session_id=session_id, user_id=auth.user_id)
+    if session_record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    record = _load_request_or_404(db_session, request_id=request_id, user_id=auth.user_id)
+    if record.session_id != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
+
+    items, total = RequestEventRepository(db_session).list_for_request(
+        request_id=request_id,
+        session_id=session_id,
+        limit=limit,
+        offset=offset,
+        event_type=event_type,
+    )
+    return RequestEventListResponse(
+        items=[_build_event_response(item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 @router.post("", response_model=RequestResponse, status_code=status.HTTP_202_ACCEPTED)
 def create_request(
@@ -358,73 +696,22 @@ def create_request(
         db_session,
         session_id=record.session_id,
         user_id=auth.user_id,
-        session_summary=graph_result.session_summary
-        or session_summary_service.build(
+        session_summary=_build_session_summary(
+            db_session=db_session,
+            session_id=record.session_id,
+            user_id=auth.user_id,
             message_text=payload.message,
-            plan_object=graph_result.plan_object,
-            task_snapshot=graph_result.task_snapshot,
-            verifier_decision=graph_result.verifier_decision,
+            graph_result=graph_result,
         ),
     )
     event_service = EventService(db_session)
-    event_service.append_event(
-        request_id=record.id,
-        session_id=record.session_id,
-        event_type="request.created",
-        payload={
-            "type": "request.created",
-            "request_id": record.id,
-            "session_id": record.session_id,
-            "status": record.status,
-            "task": _load_task_snapshot(record.task_snapshot),
-        },
+    _append_request_lifecycle_events(
+        event_service,
+        record=record,
+        graph_result=graph_result,
+        session_context=session_context,
+        audit_context=_build_graph_audit_context(graph_result, auth.user_id),
     )
-    if record.status == "pending_approval":
-        event_service.append_audit_event(
-            request_id=record.id,
-            session_id=record.session_id,
-            event_type="approval.required",
-            payload={
-                "type": "approval.required",
-                "request_id": record.id,
-                "session_id": record.session_id,
-                "status": record.status,
-                "final_response": record.final_response,
-                "missing_inputs": _load_missing_inputs(record.missing_inputs),
-                "task": _load_task_snapshot(record.task_snapshot),
-            },
-            audit_context=_build_graph_audit_context(graph_result, auth.user_id),
-        )
-    elif record.status == RequestStatus.AMBIGUOUS.value:
-        event_service.append_audit_event(
-            request_id=record.id,
-            session_id=record.session_id,
-            event_type="request.ambiguous",
-            payload={
-                "type": "request.ambiguous",
-                "request_id": record.id,
-                "session_id": record.session_id,
-                "status": record.status,
-                "final_response": record.final_response,
-                "task": _load_task_snapshot(record.task_snapshot),
-            },
-            audit_context=_build_graph_audit_context(graph_result, auth.user_id),
-        )
-    else:
-        event_service.append_audit_event(
-            request_id=record.id,
-            session_id=record.session_id,
-            event_type="response.completed",
-            payload={
-                "type": "response.completed",
-                "request_id": record.id,
-                "session_id": record.session_id,
-                "status": record.status,
-                "final_response": record.final_response,
-                "task": _load_task_snapshot(record.task_snapshot),
-            },
-            audit_context=_build_graph_audit_context(graph_result, auth.user_id),
-        )
     if superseded_request is not None:
         event_service.append_event(
             request_id=superseded_request.id,
@@ -525,28 +812,19 @@ def _handle_natural_language_approval(
         db_session,
         session_id=previous_request.session_id,
         user_id=auth.user_id,
-        session_summary=graph_result.session_summary
-        or session_summary_service.build(
+        session_summary=_build_session_summary(
+            db_session=db_session,
+            session_id=previous_request.session_id,
+            user_id=auth.user_id,
             message_text=previous_request.message_text,
-            plan_object=graph_result.plan_object,
-            task_snapshot=graph_result.task_snapshot,
-            verifier_decision=graph_result.verifier_decision,
+            graph_result=graph_result,
         ),
     )
-    event_type = "execution.completed" if previous_request.status == "completed" else "execution.failed"
-    EventService(db_session).append_audit_event(
-        request_id=previous_request.id,
-        session_id=previous_request.session_id,
-        event_type=event_type,
-        payload={
-            "type": event_type,
-            "request_id": previous_request.id,
-            "session_id": previous_request.session_id,
-            "status": previous_request.status,
-            "final_response": previous_request.final_response,
-            "task": _load_task_snapshot(previous_request.task_snapshot),
-        },
-        audit_context=_build_graph_audit_context(graph_result, auth.user_id),
+    _append_execution_terminal_event(
+        EventService(db_session),
+        record=previous_request,
+        graph_result=graph_result,
+        user_id=auth.user_id,
     )
     _append_user_message(
         db_session,
@@ -590,12 +868,12 @@ def _handle_natural_language_rejection(
         db_session,
         session_id=previous_request.session_id,
         user_id=auth.user_id,
-        session_summary=graph_result.session_summary
-        or session_summary_service.build(
+        session_summary=_build_session_summary(
+            db_session=db_session,
+            session_id=previous_request.session_id,
+            user_id=auth.user_id,
             message_text=previous_request.message_text,
-            plan_object=graph_result.plan_object,
-            task_snapshot=graph_result.task_snapshot,
-            verifier_decision=graph_result.verifier_decision,
+            graph_result=graph_result,
         ),
     )
     EventService(db_session).append_audit_event(
@@ -716,27 +994,19 @@ def approve_request(
         db_session,
         session_id=record.session_id,
         user_id=auth.user_id,
-        session_summary=graph_result.session_summary
-        or session_summary_service.build(
+        session_summary=_build_session_summary(
+            db_session=db_session,
+            session_id=record.session_id,
+            user_id=auth.user_id,
             message_text=record.message_text,
-            plan_object=graph_result.plan_object,
-            task_snapshot=graph_result.task_snapshot,
-            verifier_decision=graph_result.verifier_decision,
+            graph_result=graph_result,
         ),
     )
-    EventService(db_session).append_audit_event(
-        request_id=record.id,
-        session_id=record.session_id,
-        event_type="execution.completed" if record.status == "completed" else "execution.failed",
-        payload={
-            "type": "execution.completed" if record.status == "completed" else "execution.failed",
-            "request_id": record.id,
-            "session_id": record.session_id,
-            "status": record.status,
-            "final_response": record.final_response,
-            "task": _load_task_snapshot(record.task_snapshot),
-        },
-        audit_context=_build_graph_audit_context(graph_result, auth.user_id),
+    _append_execution_terminal_event(
+        EventService(db_session),
+        record=record,
+        graph_result=graph_result,
+        user_id=auth.user_id,
     )
     _sync_assistant_message(db_session, record)
     return ApproveRequestResponse(
@@ -788,12 +1058,12 @@ def reject_request(
         db_session,
         session_id=record.session_id,
         user_id=auth.user_id,
-        session_summary=graph_result.session_summary
-        or session_summary_service.build(
+        session_summary=_build_session_summary(
+            db_session=db_session,
+            session_id=record.session_id,
+            user_id=auth.user_id,
             message_text=record.message_text,
-            plan_object=graph_result.plan_object,
-            task_snapshot=graph_result.task_snapshot,
-            verifier_decision=graph_result.verifier_decision,
+            graph_result=graph_result,
         ),
     )
     EventService(db_session).append_audit_event(

@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from chatops.db.models import MessageRecord, RequestEventRecord, RequestRecord, SessionRecord
@@ -95,6 +95,18 @@ class RequestRepository:
         )
         return self.session.execute(query).scalar_one_or_none()
 
+    def list_recent_for_session(self, session_id: int, user_id: str, limit: int = 10) -> list[RequestRecord]:
+        query = (
+            select(RequestRecord)
+            .where(
+                RequestRecord.session_id == session_id,
+                RequestRecord.user_id == user_id,
+            )
+            .order_by(RequestRecord.created_at.desc(), RequestRecord.id.desc())
+            .limit(limit)
+        )
+        return list(self.session.execute(query).scalars())
+
     def list_for_session(self, session_id: int, user_id: str) -> list[RequestRecord]:
         query = (
             select(RequestRecord)
@@ -105,6 +117,86 @@ class RequestRepository:
             .order_by(RequestRecord.created_at.asc(), RequestRecord.id.asc())
         )
         return list(self.session.execute(query).scalars())
+
+    def list_page_for_session(
+        self,
+        session_id: int,
+        user_id: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        status: str | None = None,
+        request_type: str | None = None,
+        ascending: bool = False,
+        query_text: str | None = None,
+    ) -> tuple[list[RequestRecord], int]:
+        filters = [
+            RequestRecord.session_id == session_id,
+            RequestRecord.user_id == user_id,
+        ]
+        if status:
+            filters.append(RequestRecord.status == status)
+        if request_type:
+            filters.append(RequestRecord.request_type == request_type)
+        if query_text:
+            term = f"%{query_text.strip().lower()}%"
+            filters.append(
+                or_(
+                    func.lower(RequestRecord.message_text).like(term),
+                    func.lower(func.coalesce(RequestRecord.effective_message_text, "")).like(term),
+                    func.lower(func.coalesce(RequestRecord.final_response, "")).like(term),
+                )
+            )
+
+        order_by = (
+            (RequestRecord.created_at.asc(), RequestRecord.id.asc())
+            if ascending
+            else (RequestRecord.created_at.desc(), RequestRecord.id.desc())
+        )
+        total_query = select(func.count()).select_from(RequestRecord).where(*filters)
+        items_query = (
+            select(RequestRecord)
+            .where(*filters)
+            .order_by(*order_by)
+            .offset(offset)
+            .limit(limit)
+        )
+        total = int(self.session.execute(total_query).scalar_one())
+        items = list(self.session.execute(items_query).scalars())
+        return items, total
+
+    def search_for_user(
+        self,
+        user_id: str,
+        query_text: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        session_id: int | None = None,
+    ) -> tuple[list[RequestRecord], int]:
+        term = f"%{query_text.strip().lower()}%"
+        filters = [RequestRecord.user_id == user_id]
+        if session_id is not None:
+            filters.append(RequestRecord.session_id == session_id)
+        filters.append(
+            or_(
+                func.lower(RequestRecord.message_text).like(term),
+                func.lower(func.coalesce(RequestRecord.effective_message_text, "")).like(term),
+                func.lower(func.coalesce(RequestRecord.final_response, "")).like(term),
+            )
+        )
+
+        total_query = select(func.count()).select_from(RequestRecord).where(*filters)
+        items_query = (
+            select(RequestRecord)
+            .where(*filters)
+            .order_by(RequestRecord.updated_at.desc(), RequestRecord.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        total = int(self.session.execute(total_query).scalar_one())
+        items = list(self.session.execute(items_query).scalars())
+        return items, total
 
     def update_status(self, request_id: int, status: str) -> RequestRecord | None:
         record = self.session.get(RequestRecord, request_id)
@@ -168,6 +260,34 @@ class RequestEventRepository:
             .order_by(RequestEventRecord.sequence.asc())
         )
         return list(self.session.execute(query).scalars())
+
+    def list_for_request(
+        self,
+        request_id: int,
+        session_id: int,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        event_type: str | None = None,
+    ) -> tuple[list[RequestEventRecord], int]:
+        filters = [
+            RequestEventRecord.request_id == request_id,
+            RequestEventRecord.session_id == session_id,
+        ]
+        if event_type:
+            filters.append(RequestEventRecord.event_type == event_type)
+
+        total_query = select(func.count()).select_from(RequestEventRecord).where(*filters)
+        items_query = (
+            select(RequestEventRecord)
+            .where(*filters)
+            .order_by(RequestEventRecord.sequence.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+        total = int(self.session.execute(total_query).scalar_one())
+        items = list(self.session.execute(items_query).scalars())
+        return items, total
 
     def get_latest_sequence(self, request_id: int) -> int:
         query = (
