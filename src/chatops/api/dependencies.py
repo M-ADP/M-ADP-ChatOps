@@ -6,7 +6,14 @@ from pathlib import Path
 from fastapi import Header
 from sqlalchemy.orm import Session, sessionmaker
 
-from chatops.common.config.settings import AppConfig, DatabaseConfig, GroqConfig, get_app_config, get_db_config, get_groq_config
+from chatops.common.config.settings import (
+    AppConfig,
+    BedrockConfig,
+    DatabaseConfig,
+    get_app_config,
+    get_bedrock_config,
+    get_db_config,
+)
 from chatops.db.session import build_session_factory
 from chatops.dependencies.client.application import get_application_client
 from chatops.dependencies.client.monitoring import get_monitoring_client
@@ -16,7 +23,7 @@ from chatops.graph.service import GraphService
 from chatops.schemas.auth import AuthContext
 from chatops.services.auth import build_auth_context
 from chatops.services.downstream_dispatcher import DownstreamDispatcher
-from chatops.services.llm import GroqLLMService
+from chatops.services.llm import BedrockLLMService
 from chatops.services.registry import RegistryService
 from chatops.services.resolver import ParameterResolverService
 
@@ -32,8 +39,8 @@ def get_database_settings() -> DatabaseConfig:
 
 
 @lru_cache(maxsize=1)
-def get_groq_settings() -> GroqConfig:
-    return get_groq_config()
+def get_bedrock_settings() -> BedrockConfig:
+    return get_bedrock_config()
 
 
 @lru_cache(maxsize=1)
@@ -53,13 +60,25 @@ def get_registry_service() -> RegistryService:
 
 
 @lru_cache(maxsize=1)
-def get_llm_service() -> GroqLLMService:
+def get_llm_service() -> BedrockLLMService:
+    import boto3
+    from botocore.config import Config
+
     app_settings = get_app_settings()
-    groq_settings = get_groq_settings()
-    return GroqLLMService(
-        api_key=groq_settings.api_key,
-        model=groq_settings.model,
+    bedrock_settings = get_bedrock_settings()
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=bedrock_settings.region,
+        config=Config(
+            connect_timeout=app_settings.downstream_timeout_seconds,
+            read_timeout=app_settings.downstream_timeout_seconds,
+            retries={"max_attempts": 1, "mode": "standard"},
+        ),
+    )
+    return BedrockLLMService(
+        model_id=bedrock_settings.model_id,
         timeout_seconds=app_settings.downstream_timeout_seconds,
+        client=client,
     )
 
 

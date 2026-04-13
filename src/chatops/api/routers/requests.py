@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import inspect
 import logging
+import threading
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from chatops.api.dependencies import get_auth_context, get_db_session, get_graph_service
+from chatops.common.id_generator import IdGenerator
 from chatops.common.config.settings import get_app_config
 from chatops.db.models import RequestRecord
 from chatops.db.repositories import MessageRepository, RequestEventRepository, RequestRepository, SessionRepository
@@ -100,6 +103,53 @@ def _load_specialist_result(raw_value: str | None) -> dict | None:
     if isinstance(loaded, dict):
         return loaded
     return None
+
+
+def _supports_parameter(func, parameter_name: str) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return False
+    return parameter_name in signature.parameters
+
+
+def _preview_request(
+    graph_service: GraphService,
+    *,
+    message_text: str,
+    session_context: dict[str, object] | None,
+) -> dict[str, object] | None:
+    preview = getattr(graph_service, "preview_request", None)
+    if preview is None:
+        return None
+    return preview(message_text=message_text, session_context=session_context)
+
+
+def _invoke_graph_handle_request(
+    graph_service: GraphService,
+    *,
+    session_id: int,
+    user_id: str,
+    message_text: str,
+    user_role: str | None,
+    session_context: dict[str, object] | None,
+    request_id: int | None = None,
+    response_stream_handler=None,
+):
+    kwargs = {
+        "session_id": session_id,
+        "user_id": user_id,
+        "message_text": message_text,
+        "user_role": user_role,
+        "session_context": session_context,
+    }
+    if request_id is not None and _supports_parameter(graph_service.handle_request, "request_id"):
+        kwargs["request_id"] = request_id
+    if response_stream_handler is not None and _supports_parameter(
+        graph_service.handle_request, "response_stream_handler"
+    ):
+        kwargs["response_stream_handler"] = response_stream_handler
+    return graph_service.handle_request(**kwargs)
 
 
 def _build_request_response(record: RequestRecord, message_text: str) -> RequestResponse:
@@ -330,20 +380,22 @@ def _append_structured_event(
     )
 
 
-def _append_request_lifecycle_events(
-    event_service: EventService,
-    *,
-    record: RequestRecord,
-    graph_result,
-    session_context: dict[str, object] | None,
-    audit_context: dict[str, object],
-) -> None:
+def _context_hydration_payload(session_context: dict[str, object] | None) -> dict[str, object]:
     entity_memory = session_context.get("entity_memory") if isinstance(session_context, dict) else {}
     request_trail = session_context.get("request_trail") if isinstance(session_context, dict) else []
     projects = entity_memory.get("projects", []) if isinstance(entity_memory, dict) else []
     applications = entity_memory.get("applications", []) if isinstance(entity_memory, dict) else []
     users = entity_memory.get("users", []) if isinstance(entity_memory, dict) else []
 
+    return {
+        "project_context_count": len(projects) if isinstance(projects, list) else 0,
+        "application_context_count": len(applications) if isinstance(applications, list) else 0,
+        "user_context_count": len(users) if isinstance(users, list) else 0,
+        "request_trail_count": len(request_trail) if isinstance(request_trail, list) else 0,
+    }
+
+
+def _append_request_created_event(event_service: EventService, *, record: RequestRecord) -> None:
     _append_structured_event(
         event_service,
         request_id=record.id,
@@ -359,6 +411,17 @@ def _append_request_lifecycle_events(
             "task": _load_task_snapshot(record.task_snapshot),
         },
     )
+
+
+def _append_context_hydrated_event(
+    event_service: EventService,
+    *,
+    record: RequestRecord,
+    session_context: dict[str, object] | None,
+) -> None:
+    hydration_payload = _context_hydration_payload(session_context)
+    hydration_payload["task"] = _load_task_snapshot(record.task_snapshot)
+
     _append_structured_event(
         event_service,
         request_id=record.id,
@@ -369,14 +432,17 @@ def _append_request_lifecycle_events(
         message="세션 문맥을 반영했습니다.",
         status_value=record.status,
         progress=20,
-        payload={
-            "project_context_count": len(projects) if isinstance(projects, list) else 0,
-            "application_context_count": len(applications) if isinstance(applications, list) else 0,
-            "user_context_count": len(users) if isinstance(users, list) else 0,
-            "request_trail_count": len(request_trail) if isinstance(request_trail, list) else 0,
-            "task": _load_task_snapshot(record.task_snapshot),
-        },
+        payload=hydration_payload,
     )
+
+
+def _append_request_resolution_events(
+    event_service: EventService,
+    *,
+    record: RequestRecord,
+    graph_result,
+    audit_context: dict[str, object],
+) -> None:
     _append_structured_event(
         event_service,
         request_id=record.id,
@@ -471,6 +537,28 @@ def _append_request_lifecycle_events(
     )
 
 
+def _append_request_lifecycle_events(
+    event_service: EventService,
+    *,
+    record: RequestRecord,
+    graph_result,
+    session_context: dict[str, object] | None,
+    audit_context: dict[str, object],
+) -> None:
+    _append_request_created_event(event_service, record=record)
+    _append_context_hydrated_event(
+        event_service,
+        record=record,
+        session_context=session_context,
+    )
+    _append_request_resolution_events(
+        event_service,
+        record=record,
+        graph_result=graph_result,
+        audit_context=audit_context,
+    )
+
+
 def _append_execution_started_event(event_service: EventService, record: RequestRecord) -> None:
     _append_structured_event(
         event_service,
@@ -507,6 +595,142 @@ def _append_execution_terminal_event(
         payload={"final_response": record.final_response, "task": _load_task_snapshot(record.task_snapshot)},
         audit_context=audit_context,
     )
+
+
+def _append_response_stream_start_event(event_service: EventService, *, record: RequestRecord) -> None:
+    _append_structured_event(
+        event_service,
+        request_id=record.id,
+        session_id=record.session_id,
+        event_type="response.started",
+        phase="response",
+        step="started",
+        message="AI 응답 생성을 시작했습니다.",
+        status_value=RequestStatus.PROCESSING.value,
+        progress=80,
+    )
+
+
+def _append_response_delta_event(
+    event_service: EventService,
+    *,
+    record: RequestRecord,
+    text: str,
+) -> None:
+    event_service.append_event(
+        request_id=record.id,
+        session_id=record.session_id,
+        event_type="response.delta",
+        payload={
+            "type": "response.delta",
+            "request_id": record.id,
+            "session_id": record.session_id,
+            "text": text,
+        },
+    )
+
+
+def _process_async_request(
+    *,
+    session_factory: sessionmaker[Session],
+    graph_service: GraphService,
+    request_id: int,
+    session_id: int,
+    user_id: str,
+    user_role: str | None,
+    message_text: str,
+    session_context: dict[str, object] | None,
+) -> None:
+    worker_session = session_factory()
+    try:
+        repo = RequestRepository(worker_session)
+        record = repo.get_for_user(request_id=request_id, user_id=user_id)
+        if record is None:
+            return
+
+        event_service = EventService(worker_session)
+        stream_started = False
+
+        def on_response_chunk(text: str) -> None:
+            nonlocal stream_started
+            if not text:
+                return
+            if not stream_started:
+                _append_response_stream_start_event(event_service, record=record)
+                stream_started = True
+            _append_response_delta_event(event_service, record=record, text=text)
+
+        graph_result = _invoke_graph_handle_request(
+            graph_service,
+            session_id=session_id,
+            user_id=user_id,
+            message_text=message_text,
+            user_role=user_role,
+            session_context=session_context,
+            request_id=request_id,
+            response_stream_handler=on_response_chunk,
+        )
+
+        record = repo.get_for_user(request_id=request_id, user_id=user_id)
+        if record is None:
+            return
+
+        record.status = graph_result.status
+        record.request_type = graph_result.request_type
+        record.requires_approval = graph_result.requires_approval
+        record.effective_message_text = graph_result.effective_message_text
+        record.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
+        record.final_response = graph_result.final_response
+        record.resolved_references = _dump_json_field(graph_result.resolved_references)
+        record.task_snapshot = _dump_json_field(graph_result.task_snapshot)
+        record.plan_object = _dump_json_field(graph_result.plan_object)
+        record.verifier_decision = _dump_json_field(graph_result.verifier_decision)
+        record.specialist_result = _dump_json_field(graph_result.specialist_result)
+        worker_session.commit()
+        worker_session.refresh(record)
+
+        _sync_session_summary(
+            worker_session,
+            session_id=record.session_id,
+            user_id=user_id,
+            session_summary=_build_session_summary(
+                db_session=worker_session,
+                session_id=record.session_id,
+                user_id=user_id,
+                message_text=message_text,
+                graph_result=graph_result,
+            ),
+        )
+        _append_request_resolution_events(
+            event_service,
+            record=record,
+            graph_result=graph_result,
+            audit_context=_build_graph_audit_context(graph_result, user_id),
+        )
+        _sync_assistant_message(worker_session, record)
+    except Exception:
+        logger.exception("Async request processing failed for request_id=%s", request_id)
+        repo = RequestRepository(worker_session)
+        record = repo.get_for_user(request_id=request_id, user_id=user_id)
+        if record is not None and not RequestStatus(record.status).is_terminal:
+            record.status = RequestStatus.FAILED.value
+            record.final_response = "요청 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            worker_session.commit()
+            _append_structured_event(
+                EventService(worker_session),
+                request_id=record.id,
+                session_id=record.session_id,
+                event_type="request.failed",
+                phase="response",
+                step="failed",
+                message="요청 처리에 실패했습니다.",
+                status_value=record.status,
+                progress=100,
+                payload={"final_response": record.final_response},
+            )
+            _sync_assistant_message(worker_session, record)
+    finally:
+        worker_session.close()
 
 
 # ──────────────────────────────────────────────────
@@ -663,7 +887,80 @@ def create_request(
             db_session.flush()
         # UNKNOWN falls through to normal flow
 
-    graph_result = graph_service.handle_request(
+    preview = _preview_request(
+        graph_service,
+        message_text=payload.message,
+        session_context=session_context,
+    )
+    if preview is not None and preview.get("request_type") in {"inquiry", "query"}:
+        request_id = IdGenerator.generate_sonyflake_id()
+        record = repo.create(
+            request_id=request_id,
+            session_id=session_id,
+            user_id=auth.user_id,
+            message_text=payload.message,
+            effective_message_text=str(preview.get("effective_message_text") or payload.message),
+            request_type=str(preview.get("request_type") or ""),
+            requires_approval=False,
+        )
+        record.status = RequestStatus.PROCESSING.value
+        if superseded_request is not None:
+            _supersede_pending_request(superseded_request, replacement_request_id=record.id)
+        db_session.commit()
+        db_session.refresh(record)
+        _append_user_message(
+            db_session,
+            session_id=record.session_id,
+            request_id=record.id,
+            user_id=auth.user_id,
+            message_text=payload.message,
+        )
+        event_service = EventService(db_session)
+        _append_request_created_event(event_service, record=record)
+        _append_context_hydrated_event(
+            event_service,
+            record=record,
+            session_context=session_context,
+        )
+        if superseded_request is not None:
+            event_service.append_event(
+                request_id=superseded_request.id,
+                session_id=superseded_request.session_id,
+                event_type="approval.superseded",
+                payload={
+                    "type": "approval.superseded",
+                    "request_id": superseded_request.id,
+                    "session_id": superseded_request.session_id,
+                    "status": superseded_request.status,
+                    "superseded_by": record.id,
+                    "task": _load_task_snapshot(superseded_request.task_snapshot),
+                },
+            )
+
+        session_factory = sessionmaker(
+            bind=db_session.get_bind(),
+            autoflush=False,
+            autocommit=False,
+            future=True,
+        )
+        threading.Thread(
+            target=_process_async_request,
+            kwargs={
+                "session_factory": session_factory,
+                "graph_service": graph_service,
+                "request_id": record.id,
+                "session_id": session_id,
+                "user_id": auth.user_id,
+                "user_role": auth.user_role,
+                "message_text": payload.message,
+                "session_context": session_context,
+            },
+            daemon=True,
+        ).start()
+        return _build_request_response(record, record.message_text)
+
+    graph_result = _invoke_graph_handle_request(
+        graph_service,
         session_id=session_id,
         user_id=auth.user_id,
         message_text=payload.message,
