@@ -11,12 +11,12 @@ from chatops.common.config.application_server import (
 from chatops.common.config.project_server import ProjectServerConfig, get_project_server_config
 from chatops.common.config.settings import (
     AppConfig,
+    BedrockConfig,
     DatabaseConfig,
-    GroqConfig,
     SonyflakeConfig,
     get_app_config,
+    get_bedrock_config,
     get_db_config,
-    get_groq_config,
     get_sonyflake_config,
     resolve_env_file,
 )
@@ -25,8 +25,8 @@ from chatops.common.config.user_server import UserServerConfig, get_user_server_
 
 class Settings(BaseSettings):
     database_url: str
-    groq_api_key: str
-    groq_model: str = "llama-3.3-70b-versatile"
+    bedrock_model_id: str = "amazon.nova-2-lite-v1:0"
+    bedrock_region: str = "us-east-1"
     resource_server_base_url: str = "http://localhost:8001"
     user_server_base_url: str = "http://localhost:8002"
     application_server_base_url: str = "http://localhost:8003"
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
         *,
         app_config: AppConfig,
         db_config: DatabaseConfig,
-        groq_config: GroqConfig,
+        bedrock_config: BedrockConfig,
         project_server: ProjectServerConfig,
         user_server: UserServerConfig,
         application_server: ApplicationServerConfig,
@@ -56,8 +56,8 @@ class Settings(BaseSettings):
         return cls.model_validate(
             {
                 "database_url": db_config.url,
-                "groq_api_key": groq_config.api_key,
-                "groq_model": groq_config.model,
+                "bedrock_model_id": bedrock_config.model_id,
+                "bedrock_region": bedrock_config.region,
                 "resource_server_base_url": project_server.SERVER_BASE_URL,
                 "user_server_base_url": user_server.SERVER_BASE_URL,
                 "application_server_base_url": application_server.SERVER_BASE_URL,
@@ -73,7 +73,7 @@ def get_settings() -> Settings:
     return Settings.from_components(
         app_config=get_app_config(),
         db_config=get_db_config(),
-        groq_config=get_groq_config(),
+        bedrock_config=get_bedrock_config(),
         project_server=get_project_server_config(),
         user_server=get_user_server_config(),
         application_server=get_application_server_config(),

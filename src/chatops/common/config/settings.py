@@ -83,16 +83,16 @@ class DatabaseConfig(LoggedSettings):
         return self.database_url
 
 
-class GroqConfig(LoggedSettings):
+class BedrockConfig(LoggedSettings):
     model_config = SettingsConfigDict(
         env_file=str(resolve_env_file()),
         env_file_encoding="utf-8",
-        env_prefix="GROQ_",
+        env_prefix="BEDROCK_",
         extra="ignore",
     )
 
-    api_key: str = "test-groq-api-key"
-    model: str = "llama-3.3-70b-versatile"
+    model_id: str = "amazon.nova-2-lite-v1:0"
+    region: str = "us-east-1"
 
 
 class SonyflakeConfig(LoggedSettings):
@@ -120,8 +120,8 @@ def get_db_config() -> DatabaseConfig:
 
 @register_config
 @lru_cache(maxsize=1)
-def get_groq_config() -> GroqConfig:
-    return GroqConfig()
+def get_bedrock_config() -> BedrockConfig:
+    return BedrockConfig()
 
 
 @register_config
