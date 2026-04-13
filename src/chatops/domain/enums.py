@@ -26,6 +26,7 @@ class RequestStatus(str, Enum):
     EXECUTED = "executed"
     COMPLETED = "completed"
     FAILED = "failed"
+    ESCALATED = "escalated"
     CANCELLED = "cancelled"
     SUPERSEDED = "superseded"
 
@@ -33,7 +34,7 @@ class RequestStatus(str, Enum):
     def terminal_statuses(cls) -> frozenset["RequestStatus"]:
         return frozenset({
             cls.EXECUTED, cls.COMPLETED, cls.FAILED,
-            cls.CANCELLED, cls.REJECTED, cls.APPROVAL_EXPIRED,
+            cls.ESCALATED, cls.CANCELLED, cls.REJECTED, cls.APPROVAL_EXPIRED,
             cls.SUPERSEDED,
         })
 
