@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any, Protocol
 
-import httpx
+from chatops.services.response_streaming import get_response_stream_handler
 
 INQUIRY_MARKERS = ("방법", "어떻게", "가이드", "설명", "사용법")
 COMMAND_MARKERS = (
@@ -25,6 +25,18 @@ COMMAND_MARKERS = (
 )
 QUERY_MARKERS = ("목록", "리스트", "조회", "상태", "보여", "알려", "확인", "트래픽", "로그", "상세")
 INTERNAL_OPERATION_SUMMARY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$")
+
+# 액션 + inquiry 조합 패턴 ("삭제 방법", "어떻게 만들어" 등은 inquiry로 강하게 감지)
+_INQUIRY_ACTION_PATTERNS = [
+    re.compile(r"(삭제|생성|수정|변경|배포|실행|추가|제거|등록)\s*(방법|어떻게|가이드|설명|사용법)"),
+    re.compile(r"(방법|어떻게|가이드|설명|사용법)\s*(을|를)?\s*(알려|보여|설명|가르쳐)"),
+    re.compile(r"어떻게\s+(삭제|생성|수정|변경|배포|실행|추가|제거|등록)"),
+]
+
+# 신뢰도 임계값: 이 이상이면 가드레일 스킵
+_GUARDRAIL_SKIP_CONFIDENCE = 0.85
+# 이 미만의 신뢰도에서만 강한 키워드 신호로 덮어씀
+_GUARDRAIL_OVERRIDE_CONFIDENCE = 0.80
 
 
 class LLMService(Protocol):
@@ -47,39 +59,37 @@ class LLMService(Protocol):
         candidate_operation_ids: list[str],
     ) -> dict[str, Any]: ...
 
-    def verify_execution(self, execution_result: dict[str, Any]) -> dict[str, Any]: ...
+    def verify_execution(
+        self,
+        execution_result: dict[str, Any],
+        operation_id: str | None = None,
+        message_text: str | None = None,
+    ) -> dict[str, Any]: ...
 
 
-class GroqLLMService:
+class BedrockLLMService:
     def __init__(
         self,
-        api_key: str,
-        model: str,
+        model_id: str,
         timeout_seconds: int,
-        client: httpx.Client | None = None,
+        client: Any,
+        max_tokens: int = 1024,
     ) -> None:
-        self.api_key = api_key
-        self.model = model
+        self.model_id = model_id
         self.timeout_seconds = timeout_seconds
-        self.client = client or httpx.Client(timeout=timeout_seconds)
-        self.endpoint = "https://api.groq.com/openai/v1/chat/completions"
+        self.client = client
+        self.max_tokens = max_tokens
 
     def classify(self, message_text: str) -> dict[str, Any]:
         try:
-            content = self._chat_completion(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "당신은 요청 분류기다. 사용자 메시지를 inquiry, query, command 중 하나로만 분류한다. "
-                            "JSON 객체만 반환하고 키는 request_type, intent, classification_reason, classification_confidence, "
-                            "operation_candidates, is_ambiguous, missing_slots, needs_confirmation를 사용한다. "
-                            "classification_confidence는 0과 1 사이 숫자다."
-                        ),
-                    },
-                    {"role": "user", "content": message_text},
-                ],
-                response_format={"type": "json_object"},
+            content = self._text_response(
+                system_prompt=(
+                    "당신은 요청 분류기다. 사용자 메시지를 inquiry, query, command 중 하나로만 분류한다. "
+                    "JSON 객체만 반환하고 키는 request_type, intent, classification_reason, classification_confidence, "
+                    "operation_candidates, is_ambiguous, missing_slots, needs_confirmation를 사용한다. "
+                    "classification_confidence는 0과 1 사이 숫자다."
+                ),
+                user_prompt=message_text,
             )
             parsed = json.loads(content)
             result = {
@@ -93,7 +103,7 @@ class GroqLLMService:
                 "needs_confirmation": bool(parsed.get("needs_confirmation", False)),
             }
             return self._apply_classification_guardrails(message_text, result)
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError):
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError, Exception):
             return self._fallback_classification(message_text)
 
     def answer_inquiry(
@@ -105,57 +115,33 @@ class GroqLLMService:
             return "현재 지원하지 않는 기능입니다. 지원되는 프로젝트, 앱, 모니터링 조회 및 변경 작업만 요청할 수 있습니다."
         try:
             registry_context = self._format_inquiry_context(supported_operations)
-            return self._chat_completion(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "당신은 운영용 ChatOps 도우미다. 반드시 제공된 registry context만 근거로 답한다. "
-                            "지원하지 않는 기능은 지원하지 않는다고 명확히 답하고, 없는 기능을 있다고 말하지 않는다. "
-                            "답변은 짧고 직접적으로 작성한다."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": f"사용자 문의: {message_text}\nregistry context:\n{registry_context}",
-                    },
-                ]
+            return self._model_text_response(
+                system_prompt=(
+                    "당신은 운영용 ChatOps 도우미다. 반드시 제공된 registry context만 근거로 답한다. "
+                    "지원하지 않는 기능은 지원하지 않는다고 명확히 답하고, 없는 기능을 있다고 말하지 않는다. "
+                    "답변은 짧고 직접적으로 작성한다."
+                ),
+                user_prompt=f"사용자 문의: {message_text}\nregistry context:\n{registry_context}",
             )
-        except httpx.HTTPError:
+        except Exception:
             return self._fallback_inquiry_answer(message_text, supported_operations)
 
     def interpret_query_result(self, message_text: str, raw_result: dict[str, Any]) -> str:
         try:
-            return self._chat_completion(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "당신은 조회 결과를 해석하는 운영 도우미다. 결과를 짧게 요약한다.",
-                    },
-                    {
-                        "role": "user",
-                        "content": f"사용자 요청: {message_text}\n조회 결과: {json.dumps(raw_result, ensure_ascii=False)}",
-                    },
-                ]
+            return self._model_text_response(
+                system_prompt="당신은 조회 결과를 해석하는 운영 도우미다. 결과를 짧게 요약한다.",
+                user_prompt=f"사용자 요청: {message_text}\n조회 결과: {json.dumps(raw_result, ensure_ascii=False)}",
             )
-        except httpx.HTTPError:
+        except Exception:
             return self._fallback_query_interpretation(raw_result)
 
     def plan_command(self, message_text: str, operation_ids: list[str]) -> str:
         try:
-            return self._chat_completion(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "당신은 명령 실행 계획 작성기다. 실행 전에 보여줄 짧은 계획을 한국어로 작성한다.",
-                    },
-                    {
-                        "role": "user",
-                        "content": f"사용자 요청: {message_text}\n후보 작업: {', '.join(operation_ids)}",
-                    },
-                ]
+            return self._text_response(
+                system_prompt="당신은 명령 실행 계획 작성기다. 실행 전에 보여줄 짧은 계획을 한국어로 작성한다.",
+                user_prompt=f"사용자 요청: {message_text}\n후보 작업: {', '.join(operation_ids)}",
             )
-        except httpx.HTTPError:
+        except Exception:
             return self._fallback_command_plan(operation_ids)
 
     def build_plan_object(
@@ -165,140 +151,248 @@ class GroqLLMService:
         candidate_operation_ids: list[str],
     ) -> dict[str, Any]:
         try:
-            content = self._chat_completion(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "당신은 ChatOps planner다. 사용자 목표를 구조화된 JSON plan object로만 반환한다. "
-                            "키는 goal, specialist, entities, constraints, candidate_steps, risk_level, required_clarifications 를 사용한다."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"사용자 요청: {message_text}\n"
-                            f"request_type: {request_type}\n"
-                            f"candidate_operation_ids: {', '.join(candidate_operation_ids)}"
-                        ),
-                    },
-                ],
-                response_format={"type": "json_object"},
+            content = self._text_response(
+                system_prompt=(
+                    "당신은 ChatOps planner다. 사용자 목표를 구조화된 JSON plan object로만 반환한다. "
+                    "키는 goal, specialist, entities, constraints, candidate_steps, risk_level, required_clarifications 를 사용한다."
+                ),
+                user_prompt=(
+                    f"사용자 요청: {message_text}\n"
+                    f"request_type: {request_type}\n"
+                    f"candidate_operation_ids: {', '.join(candidate_operation_ids)}"
+                ),
             )
             parsed = json.loads(content)
             if not isinstance(parsed, dict):
                 raise ValueError("plan object must be a JSON object")
             return parsed
-        except (httpx.HTTPError, json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, TypeError, Exception):
             return self._fallback_plan_object(
                 message_text=message_text,
                 request_type=request_type,
                 candidate_operation_ids=candidate_operation_ids,
             )
 
-    def verify_execution(self, execution_result: dict[str, Any]) -> dict[str, Any]:
+    def verify_execution(
+        self,
+        execution_result: dict[str, Any],
+        operation_id: str | None = None,
+        message_text: str | None = None,
+    ) -> dict[str, Any]:
         try:
-            content = self._chat_completion(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "당신은 ChatOps verifier다. 실행 결과를 보고 success, retry, clarify, escalate, stop 중 하나를 고른다. "
-                            "JSON 객체만 반환하고 키는 decision, summary, missing_inputs, follow_up_action 을 사용한다."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": f"execution_result: {json.dumps(execution_result, ensure_ascii=False)}",
-                    },
-                ],
-                response_format={"type": "json_object"},
+            context_parts: list[str] = []
+            if operation_id:
+                context_parts.append(f"실행된 작업: {operation_id}")
+            if message_text:
+                context_parts.append(f"사용자 요청: {message_text}")
+            context = "\n".join(context_parts) if context_parts else ""
+            user_prompt = (
+                f"{context}\nexecution_result: {json.dumps(execution_result, ensure_ascii=False)}"
+                if context
+                else f"execution_result: {json.dumps(execution_result, ensure_ascii=False)}"
+            )
+            content = self._text_response(
+                system_prompt=(
+                    "당신은 ChatOps verifier다. 실행 결과를 보고 "
+                    "success, retry, clarify, escalate, stop 중 하나를 고른다.\n"
+                    "판단 기준:\n"
+                    "- success: 결과가 요청 의도에 부합\n"
+                    "- retry: 일시적 오류 (5xx, timeout)\n"
+                    "- clarify: 결과가 비어있거나 요청과 불일치\n"
+                    "- escalate: 권한 문제 또는 위험한 상태 감지\n"
+                    "- stop: 복구 불가능한 오류\n"
+                    "JSON 객체만 반환하고 키는 decision, summary, missing_inputs, follow_up_action 을 사용한다."
+                ),
+                user_prompt=user_prompt,
             )
             parsed = json.loads(content)
             if not isinstance(parsed, dict):
                 raise ValueError("verifier decision must be a JSON object")
             return parsed
-        except (httpx.HTTPError, json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, TypeError, Exception):
             return self._fallback_verifier_decision(execution_result)
 
-    def _chat_completion(
-        self,
-        messages: list[dict[str, str]],
-        response_format: dict[str, str] | None = None,
-    ) -> str:
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
+    def _model_text_response(self, *, system_prompt: str, user_prompt: str) -> str:
+        if get_response_stream_handler() is not None:
+            return self._streaming_text_response(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+        return self._text_response(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+
+    def _text_response(self, *, system_prompt: str, user_prompt: str) -> str:
+        body = self.client.converse(
+            modelId=self.model_id,
+            system=[{"text": system_prompt}],
+            messages=[{"role": "user", "content": [{"text": user_prompt}]}],
+            inferenceConfig=self._inference_config(),
+        )
+        return self._extract_text(body).strip()
+
+    def _streaming_text_response(self, *, system_prompt: str, user_prompt: str) -> str:
+        stream_handler = get_response_stream_handler()
+        response = self.client.converse_stream(
+            modelId=self.model_id,
+            system=[{"text": system_prompt}],
+            messages=[{"role": "user", "content": [{"text": user_prompt}]}],
+            inferenceConfig=self._inference_config(),
+        )
+        parts: list[str] = []
+        for chunk in response["stream"]:
+            delta = chunk.get("contentBlockDelta")
+            if not isinstance(delta, dict):
+                continue
+            payload = delta.get("delta")
+            if not isinstance(payload, dict):
+                continue
+            text = payload.get("text")
+            if not isinstance(text, str) or not text:
+                continue
+            parts.append(text)
+            if stream_handler is not None:
+                stream_handler(text)
+        return "".join(parts).strip()
+
+    def _extract_text(self, body: dict[str, Any]) -> str:
+        output = body.get("output")
+        if not isinstance(output, dict):
+            raise ValueError("missing output in bedrock response")
+        message = output.get("message")
+        if not isinstance(message, dict):
+            raise ValueError("missing message in bedrock response")
+        content = message.get("content")
+        if not isinstance(content, list):
+            raise ValueError("missing content in bedrock response")
+        texts = [
+            item.get("text")
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        ]
+        if not texts:
+            raise ValueError("missing text content in bedrock response")
+        return "".join(texts)
+
+    def _inference_config(self) -> dict[str, Any]:
+        return {
+            "maxTokens": self.max_tokens,
             "temperature": 0,
         }
-        if response_format is not None:
-            payload["response_format"] = response_format
 
-        response = self.client.post(
-            self.endpoint,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        response.raise_for_status()
-        body = response.json()
-        return str(body["choices"][0]["message"]["content"]).strip()
+    def _detect_keyword_signal(self, normalized: str) -> tuple[str, str] | None:
+        """키워드 패턴 기반 분류 신호를 반환한다. (type, strength: 'strong'|'weak')
+
+        복합 패턴(액션+inquiry)을 먼저 체크해 우선순위를 보장한다.
+        """
+        # 1. 복합 패턴 우선 — 가장 강한 신호
+        for pattern in _INQUIRY_ACTION_PATTERNS:
+            if pattern.search(normalized):
+                return ("inquiry", "strong")
+
+        # 2. 개별 키워드 카운팅
+        inquiry_count = sum(1 for m in INQUIRY_MARKERS if m in normalized)
+        command_count = sum(1 for m in COMMAND_MARKERS if m in normalized)
+        query_count = sum(1 for m in QUERY_MARKERS if m in normalized)
+
+        nonzero = {
+            k: v for k, v in {
+                "inquiry": inquiry_count,
+                "command": command_count,
+                "query": query_count,
+            }.items() if v > 0
+        }
+
+        if not nonzero:
+            return None
+
+        # 단일 카테고리만 매칭 → strong
+        if len(nonzero) == 1:
+            return (next(iter(nonzero)), "strong")
+
+        # 복수 카테고리 → 최다 카운트로 weak
+        dominant = max(nonzero, key=lambda k: nonzero[k])
+        return (dominant, "weak")
 
     def _apply_classification_guardrails(
         self,
         message_text: str,
         result: dict[str, Any],
     ) -> dict[str, Any]:
-        normalized = message_text.lower()
-        forced_type: str | None = None
-        forced_intent: str | None = None
+        confidence = float(result.get("classification_confidence", 0.0))
 
-        if any(marker in normalized for marker in INQUIRY_MARKERS):
-            forced_type = "inquiry"
-            forced_intent = "answer_inquiry"
-        elif any(marker in normalized for marker in COMMAND_MARKERS):
-            forced_type = "command"
-            forced_intent = "execute_command"
-        elif any(marker in normalized for marker in QUERY_MARKERS):
-            forced_type = "query"
-            forced_intent = "query_status"
-
-        if forced_type is None or forced_type == result["request_type"]:
+        # LLM 신뢰도가 높으면 가드레일 스킵 — LLM 판단을 신뢰
+        if confidence >= _GUARDRAIL_SKIP_CONFIDENCE:
             return result
 
+        normalized = message_text.lower()
+        signal = self._detect_keyword_signal(normalized)
+
+        # 키워드 신호 없음 → 가드레일 불개입
+        if signal is None:
+            return result
+
+        signal_type, signal_strength = signal
+
+        # LLM과 키워드 방향이 같으면 신뢰도만 소폭 보강
+        if signal_type == result["request_type"]:
+            return {
+                **result,
+                "classification_confidence": max(confidence, 0.80),
+            }
+
+        # 키워드가 약한 신호(weak)이거나 LLM 신뢰도가 어느 정도 있으면 불개입
+        if signal_strength == "weak" or confidence >= _GUARDRAIL_OVERRIDE_CONFIDENCE:
+            return result
+
+        # 강한 키워드 신호 + LLM 신뢰도 낮음 → 보정
+        intent_map = {
+            "inquiry": "answer_inquiry",
+            "command": "execute_command",
+            "query": "query_status",
+        }
         return {
-            "request_type": forced_type,
-            "intent": forced_intent,
-            "classification_reason": f"정책 가드레일로 {forced_type} 요청으로 조정",
-            "classification_confidence": max(float(result.get("classification_confidence", 0.0)), 0.99),
+            "request_type": signal_type,
+            "intent": intent_map.get(signal_type, ""),
+            "classification_reason": (
+                f"가드레일 보정: {signal_type} (LLM confidence={confidence:.2f}, signal={signal_strength})"
+            ),
+            "classification_confidence": 0.75,
             "operation_candidates": list(result.get("operation_candidates", [])),
             "is_ambiguous": bool(result.get("is_ambiguous", False)),
             "missing_slots": list(result.get("missing_slots", [])),
-            "needs_confirmation": forced_type == "command",
+            "needs_confirmation": signal_type == "command",
         }
 
     def _fallback_classification(self, message_text: str) -> dict[str, Any]:
         normalized = message_text.lower()
-        if any(marker in normalized for marker in INQUIRY_MARKERS):
-            request_type = "inquiry"
-            intent = "answer_inquiry"
+
+        # 복합 패턴 우선 체크
+        signal = self._detect_keyword_signal(normalized)
+        if signal is not None:
+            signal_type, _ = signal
         elif any(marker in normalized for marker in COMMAND_MARKERS):
-            request_type = "command"
-            intent = "execute_command"
+            signal_type = "command"
+        elif any(marker in normalized for marker in QUERY_MARKERS):
+            signal_type = "query"
         else:
-            request_type = "query"
-            intent = "query_status"
+            signal_type = "query"
+
+        intent_map = {
+            "inquiry": "answer_inquiry",
+            "command": "execute_command",
+            "query": "query_status",
+        }
         return {
-            "request_type": request_type,
-            "intent": intent,
+            "request_type": signal_type,
+            "intent": intent_map.get(signal_type, "query_status"),
             "classification_reason": "LLM fallback 분류",
             "classification_confidence": 0.7,
             "operation_candidates": [],
             "is_ambiguous": False,
             "missing_slots": [],
-            "needs_confirmation": request_type == "command",
+            "needs_confirmation": signal_type == "command",
         }
 
     def _fallback_query_interpretation(self, raw_result: dict[str, Any]) -> str:
