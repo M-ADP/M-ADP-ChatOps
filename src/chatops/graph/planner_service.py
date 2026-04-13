@@ -12,7 +12,7 @@ class PlannerService:
     def build(self, *, message_text: str, request_type: str) -> dict[str, object] | None:
         if request_type not in {"query", "command"}:
             return None
-        candidate_operation_ids = self._heuristic_candidate_operation_ids(
+        candidate_operation_ids = self._registry_candidate_operation_ids(
             message_text=message_text,
             request_type=request_type,
         )
@@ -28,6 +28,24 @@ class PlannerService:
             message_text=message_text,
             request_type=request_type,
             candidate_operation_ids=candidate_operation_ids,
+        )
+
+    def _registry_candidate_operation_ids(
+        self,
+        *,
+        message_text: str,
+        request_type: str,
+    ) -> list[str]:
+        """registry 스코어링으로 후보를 뽑고, 결과 없으면 heuristic fallback."""
+        if hasattr(self.registry_service, "find_scored_candidates"):
+            scored = self.registry_service.find_scored_candidates(
+                message_text, usable_in=request_type, limit=3,
+            )
+            if scored:
+                return [sc.entry.id for sc in scored]
+        return self._heuristic_candidate_operation_ids(
+            message_text=message_text,
+            request_type=request_type,
         )
 
     @staticmethod

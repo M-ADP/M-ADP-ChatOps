@@ -23,6 +23,7 @@ from chatops.graph.session_message_service import SessionMessageService
 from chatops.graph.specialist_router import SpecialistRouter
 from chatops.graph.state import GraphState
 from chatops.graph.verifier_service import VerifierService
+from chatops.graph.verifier_transition_service import VerifierTransitionService
 from chatops.services.auth import format_missing_auth_headers, missing_auth_headers
 from chatops.services.downstream_dispatcher import EntityResolutionError
 from chatops.services.task_snapshot_builder import TaskSnapshotBuilder
@@ -58,6 +59,7 @@ class WorkflowNodes:
         )
         self.specialist_router = SpecialistRouter(registry_service=self.registry_service)
         self.verifier_service = VerifierService(llm_service=self.llm_service)
+        self.verifier_transition_service = VerifierTransitionService()
         self.policy_service = PolicyService()
         self.precheck_service = PrecheckService(
             downstream_dispatcher=self.downstream_dispatcher,
@@ -103,6 +105,7 @@ class WorkflowNodes:
             "created_at": now,
             "selected_specialist": None,
             "policy_decision": None,
+            "verifier_route": None,
             "retry_count": 0,
             "expires_at": (
                 datetime.now(timezone.utc) + timedelta(seconds=self.approval_ttl_seconds)
@@ -129,10 +132,20 @@ class WorkflowNodes:
             request_type=state["request_type"],
         )
         if not isinstance(plan_object, dict):
-            return {"plan_object": None, "selected_specialist": None}
+            return {
+                "plan_object": None,
+                "selected_specialist": None,
+                "current_step_index": 0,
+                "total_steps": 0,
+                "completed_steps": [],
+            }
+        candidate_steps = plan_object.get("candidate_steps") or []
         return {
             "plan_object": plan_object,
             "selected_specialist": str(plan_object.get("specialist") or ""),
+            "current_step_index": 0,
+            "total_steps": len(candidate_steps),
+            "completed_steps": [],
         }
 
     @safe_node
@@ -180,11 +193,19 @@ class WorkflowNodes:
             prepared["task_snapshot"] = task_snapshot
         selected_operation_id = prepared.get("selected_operation_id")
         specialist = self.specialist_router.for_operation(selected_operation_id)
-        prepared["specialist_result"] = specialist.describe(
+        specialist_result = specialist.describe(
             operation_id=selected_operation_id,
             resolved_inputs=prepared.get("resolved_inputs"),
             missing_inputs=prepared.get("missing_inputs"),
         )
+        # 도메인별 입력 검증 경고 추가
+        input_warnings = specialist.validate_inputs(
+            operation_id=selected_operation_id,
+            resolved_inputs=prepared.get("resolved_inputs"),
+        )
+        if input_warnings:
+            specialist_result["input_warnings"] = input_warnings
+        prepared["specialist_result"] = specialist_result
         return prepared
 
     @safe_node
@@ -211,6 +232,12 @@ class WorkflowNodes:
                 resolved_inputs=resolved_inputs,
             )
         )
+        # 도메인별 결과 포맷팅
+        specialist = self.specialist_router.for_operation(operation_id)
+        query_result = specialist.format_result(
+            operation_id=operation_id,
+            raw_result=query_result,
+        )
         audit_payload = self.observability_service.log_downstream_execution(
             request_id=state.get("request_id"),
             session_id=state.get("session_id"),
@@ -229,52 +256,53 @@ class WorkflowNodes:
 
     @safe_node
     def verify_query(self, state: GraphState) -> GraphState:
+        retry_count = int(state.get("retry_count", 0))
+        operation_id = state.get("selected_operation_id")
         verifier_decision = self.verifier_service.verify(
             request_type="query",
-            operation_id=state.get("selected_operation_id"),
+            operation_id=operation_id,
             execution_result=state.get("query_result"),
+            message_text=state.get("effective_message_text", state.get("message_text")),
+            resolved_inputs=state.get("resolved_inputs"),
         )
         policy_decision = self.policy_service.evaluate(
-            operation_id=state.get("selected_operation_id"),
+            operation_id=operation_id,
             risk_level=state.get("risk_level"),
-            retry_count=int(state.get("retry_count", 0)),
+            retry_count=retry_count,
             superseded=False,
         )
-        if verifier_decision.get("decision") == "retry" and not policy_decision.get("allow_retry", True):
+        verifier_route = self.verifier_transition_service.route(
+            verifier_decision=verifier_decision,
+            policy_decision=policy_decision,
+        )
+        if verifier_decision.get("decision") == "retry" and verifier_route == "escalate":
             verifier_decision = {
                 **verifier_decision,
                 "decision": "escalate",
                 "follow_up_action": "human_review",
             }
+        # specialist 재시도 전략 힌트 추가
+        if verifier_route == "retry":
+            specialist = self.specialist_router.for_operation(operation_id)
+            retry_hint = specialist.suggest_retry_strategy(
+                operation_id=operation_id,
+                error_result=state.get("query_result") or {},
+            )
+            if retry_hint:
+                verifier_decision = {**verifier_decision, "retry_hint": retry_hint}
+        next_retry_count = retry_count + 1 if verifier_route == "retry" else retry_count
         return {
             "verifier_decision": verifier_decision,
             "policy_decision": policy_decision,
+            "verifier_route": verifier_route,
+            "retry_count": next_retry_count,
         }
 
     @safe_node
     def interpret_result(self, state: GraphState) -> GraphState:
         raw_result = state.get("query_result") or {}
-        status_code = int(raw_result.get("status_code", 200))
         operation_id = state.get("selected_operation_id")
         operation = self.registry_service.get_entry(operation_id) if operation_id else None
-        if raw_result.get("success") is False or status_code >= 400:
-            final_response = str(raw_result.get("summary", "조회 요청을 처리하지 못했습니다."))
-            return {
-                "final_response": final_response,
-                "request_status": RequestStatus.FAILED.value,
-                "requires_approval": False,
-                "task_snapshot": self.task_snapshot_builder.build(
-                    operation=operation,
-                    request_status=RequestStatus.FAILED.value,
-                    request_type="query",
-                    resolved_inputs=state.get("resolved_inputs"),
-                    missing_inputs=state.get("missing_inputs"),
-                    risk_level=state.get("risk_level"),
-                    clarification_type=state.get("clarification_type"),
-                    is_ambiguous=bool(state.get("is_ambiguous", False)),
-                    summary=final_response,
-                ),
-            }
         interpreted_target = raw_result.get("result")
         if not isinstance(interpreted_target, dict):
             interpreted_target = raw_result
@@ -300,6 +328,10 @@ class WorkflowNodes:
         }
 
     @safe_node
+    def finalize_query_verifier_outcome(self, state: GraphState) -> GraphState:
+        return self._build_verifier_terminal_state(state)
+
+    @safe_node
     def plan_command(self, state: GraphState) -> GraphState:
         planned = self.command_planner.prepare(state)
         selected_operation_id = planned.get("selected_operation_id")
@@ -318,11 +350,19 @@ class WorkflowNodes:
         if task_snapshot is not None:
             planned["task_snapshot"] = task_snapshot
         specialist = self.specialist_router.for_operation(selected_operation_id)
-        planned["specialist_result"] = specialist.describe(
+        specialist_result = specialist.describe(
             operation_id=selected_operation_id,
             resolved_inputs=planned.get("resolved_inputs"),
             missing_inputs=planned.get("missing_inputs"),
         )
+        # 도메인별 입력 검증 경고 추가
+        input_warnings = specialist.validate_inputs(
+            operation_id=selected_operation_id,
+            resolved_inputs=planned.get("resolved_inputs"),
+        )
+        if input_warnings:
+            specialist_result["input_warnings"] = input_warnings
+        planned["specialist_result"] = specialist_result
         policy_decision = self.policy_service.evaluate(
             operation_id=selected_operation_id,
             risk_level=planned.get("risk_level"),
@@ -469,6 +509,12 @@ class WorkflowNodes:
                 resolved_inputs=resolved_inputs,
             )
         )
+        # 도메인별 결과 포맷팅
+        specialist = self.specialist_router.for_operation(operation_id)
+        command_result = specialist.format_result(
+            operation_id=operation_id,
+            raw_result=command_result,
+        )
         audit_payload = self.observability_service.log_downstream_execution(
             request_id=state.get("request_id"),
             session_id=state.get("session_id"),
@@ -501,54 +547,66 @@ class WorkflowNodes:
     @safe_node
     def verify_command(self, state: GraphState) -> GraphState:
         retry_count = int(state.get("retry_count", 0))
+        operation_id = state.get("selected_operation_id")
         verifier_decision = self.verifier_service.verify(
             request_type="command",
-            operation_id=state.get("selected_operation_id"),
+            operation_id=operation_id,
             execution_result=state.get("command_result"),
+            message_text=state.get("effective_message_text", state.get("message_text")),
+            resolved_inputs=state.get("resolved_inputs"),
         )
         policy_decision = self.policy_service.evaluate(
-            operation_id=state.get("selected_operation_id"),
+            operation_id=operation_id,
             risk_level=state.get("risk_level"),
             retry_count=retry_count,
             superseded=False,
         )
-        next_retry_count = retry_count + 1 if verifier_decision.get("decision") == "retry" else retry_count
-        if verifier_decision.get("decision") == "retry" and not policy_decision.get("allow_retry", True):
+        verifier_route = self.verifier_transition_service.route(
+            verifier_decision=verifier_decision,
+            policy_decision=policy_decision,
+        )
+        if verifier_decision.get("decision") == "retry" and verifier_route == "escalate":
             verifier_decision = {
                 **verifier_decision,
                 "decision": "escalate",
                 "follow_up_action": "human_review",
             }
+        # specialist 재시도 전략 힌트 추가
+        if verifier_route == "retry":
+            specialist = self.specialist_router.for_operation(operation_id)
+            retry_hint = specialist.suggest_retry_strategy(
+                operation_id=operation_id,
+                error_result=state.get("command_result") or {},
+            )
+            if retry_hint:
+                verifier_decision = {**verifier_decision, "retry_hint": retry_hint}
+        next_retry_count = retry_count + 1 if verifier_route == "retry" else retry_count
         return {
             "verifier_decision": verifier_decision,
             "policy_decision": policy_decision,
+            "verifier_route": verifier_route,
             "retry_count": next_retry_count,
         }
 
     def respond_command(self, state: GraphState) -> GraphState:
-        result = state.get("command_result") or {}
-        summary = str(result.get("summary", "명령 실행 결과가 없습니다."))
+        completed_steps = list(state.get("completed_steps") or [])
         operation_id = str(state.get("selected_operation_id") or "")
         operation = self.registry_service.get_entry(operation_id) if operation_id else None
-        if result.get("success") is False:
-            final_response = self.command_message_builder.build_command_failure_message(operation_id, summary)
-            return {
-                "final_response": final_response,
-                "request_status": RequestStatus.FAILED.value,
-                "requires_approval": False,
-                "task_snapshot": self.task_snapshot_builder.build(
-                    operation=operation,
-                    request_status=RequestStatus.FAILED.value,
-                    request_type=state.get("request_type"),
-                    resolved_inputs=state.get("resolved_inputs"),
-                    missing_inputs=state.get("missing_inputs"),
-                    risk_level=state.get("risk_level"),
-                    clarification_type=state.get("clarification_type"),
-                    is_ambiguous=bool(state.get("is_ambiguous", False)),
-                    summary=final_response,
-                ),
-            }
-        final_response = self.command_message_builder.build_command_success_message(operation_id, summary)
+
+        if len(completed_steps) > 1:
+            # 멀티스텝: 모든 단계 결과를 합산하여 응답
+            lines = []
+            for i, step in enumerate(completed_steps, start=1):
+                step_op = step.get("operation_id", "")
+                step_summary = (step.get("result") or {}).get("summary", "")
+                lines.append(f"{i}. [{step_op}] {step_summary}")
+            summary = "\n".join(lines)
+            final_response = f"✅ {len(completed_steps)}개 작업을 모두 완료했습니다:\n{summary}"
+        else:
+            result = state.get("command_result") or {}
+            summary = str(result.get("summary", "명령 실행 결과가 없습니다."))
+            final_response = self.command_message_builder.build_command_success_message(operation_id, summary)
+
         return {
             "final_response": final_response,
             "request_status": RequestStatus.COMPLETED.value,
@@ -565,6 +623,123 @@ class WorkflowNodes:
                 summary=final_response,
             ),
         }
+
+    @safe_node
+    def advance_step(self, state: GraphState) -> GraphState:
+        """멀티스텝 플랜에서 현재 단계 결과를 저장하고 다음 단계를 준비한다.
+
+        - completed_steps에 현재 단계 결과를 append
+        - current_step_index를 증가
+        - 다음 단계가 있으면 selected_operation_id를 교체하고 결과 필드를 초기화
+        - 다음 단계가 없으면 상태만 갱신 (이후 노드에서 최종 응답 생성)
+        """
+        plan_object = state.get("plan_object") or {}
+        candidate_steps = list(plan_object.get("candidate_steps") or [])
+        current_index = int(state.get("current_step_index", 0))
+        request_type = state.get("request_type", "command")
+
+        # 현재 단계 결과 수집
+        step_result = (
+            state.get("command_result") if request_type == "command" else state.get("query_result")
+        ) or {}
+        current_step = candidate_steps[current_index] if current_index < len(candidate_steps) else {}
+        completed_steps = list(state.get("completed_steps") or [])
+        completed_steps.append({
+            "step_index": current_index,
+            "operation_id": current_step.get("operation_id"),
+            "title": current_step.get("title", ""),
+            "result": step_result,
+        })
+
+        next_index = current_index + 1
+
+        if next_index < len(candidate_steps):
+            # 다음 단계 준비
+            next_step = candidate_steps[next_index]
+            next_operation_id = str(next_step.get("operation_id") or "")
+            return {
+                "current_step_index": next_index,
+                "completed_steps": completed_steps,
+                "selected_operation_id": next_operation_id,
+                "resolved_inputs": None,   # 다음 단계는 입력을 새로 해결
+                "command_result": None,
+                "query_result": None,
+                "verifier_route": None,
+                "retry_count": 0,
+            }
+
+        # 모든 단계 완료
+        return {
+            "current_step_index": next_index,
+            "completed_steps": completed_steps,
+        }
+
+    @safe_node
+    def finalize_command_verifier_outcome(self, state: GraphState) -> GraphState:
+        return self._build_verifier_terminal_state(state)
+
+    def _build_verifier_terminal_state(self, state: GraphState) -> GraphState:
+        operation_id = str(state.get("selected_operation_id") or "")
+        operation = self.registry_service.get_entry(operation_id) if operation_id else None
+        verifier_decision = state.get("verifier_decision") or {}
+        verifier_route = str(state.get("verifier_route") or "stop")
+        request_status = self._verifier_terminal_status(verifier_route)
+        missing_inputs = self._verifier_missing_inputs(state)
+        clarification_type = state.get("clarification_type")
+        if request_status == RequestStatus.INPUT_REQUIRED.value:
+            clarification_type = "missing_input"
+
+        summary = str(verifier_decision.get("summary") or self._verifier_default_summary(verifier_route))
+        if state.get("request_type") == "command" and verifier_route == "stop":
+            final_response = self.command_message_builder.build_command_failure_message(operation_id, summary)
+        else:
+            final_response = summary
+
+        task_snapshot = self.task_snapshot_builder.build(
+            operation=operation,
+            request_status=request_status,
+            request_type=state.get("request_type"),
+            resolved_inputs=state.get("resolved_inputs"),
+            missing_inputs=missing_inputs,
+            risk_level=state.get("risk_level"),
+            clarification_type=clarification_type,
+            is_ambiguous=bool(state.get("is_ambiguous", False)),
+            summary=final_response,
+        )
+        return {
+            "final_response": final_response,
+            "request_status": request_status,
+            "requires_approval": False,
+            "missing_inputs": missing_inputs,
+            "clarification_type": clarification_type,
+            "task_snapshot": task_snapshot,
+        }
+
+    @staticmethod
+    def _verifier_terminal_status(verifier_route: str) -> str:
+        if verifier_route == "clarify":
+            return RequestStatus.INPUT_REQUIRED.value
+        if verifier_route == "escalate":
+            return RequestStatus.ESCALATED.value
+        return RequestStatus.FAILED.value
+
+    @staticmethod
+    def _verifier_default_summary(verifier_route: str) -> str:
+        if verifier_route == "clarify":
+            return "추가 입력이 필요합니다."
+        if verifier_route == "escalate":
+            return "사람의 확인이 필요합니다."
+        return "요청을 종료합니다."
+
+    @staticmethod
+    def _verifier_missing_inputs(state: GraphState) -> list[str]:
+        verifier_decision = state.get("verifier_decision")
+        if isinstance(verifier_decision, dict):
+            missing_inputs = verifier_decision.get("missing_inputs")
+            if isinstance(missing_inputs, list):
+                return [str(item) for item in missing_inputs]
+        existing = state.get("missing_inputs") or []
+        return [str(item) for item in existing]
 
     # ──────────────────────────────────────────────────
     # P1: Pre-check — 대상 엔티티 존재 여부 사전 확인

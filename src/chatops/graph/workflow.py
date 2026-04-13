@@ -6,6 +6,17 @@ from chatops.graph.nodes import WorkflowNodes
 from chatops.graph.state import GraphState
 
 
+def _route_after_advance_step(state: GraphState) -> str:
+    """advance_step 이후 라우팅: 다음 단계가 있으면 재실행, 없으면 종료 노드로."""
+    current_index = int(state.get("current_step_index", 0))
+    total_steps = int(state.get("total_steps", 0))
+    request_type = state.get("request_type", "command")
+
+    if current_index < total_steps:
+        return f"next_{request_type}"   # "next_command" | "next_query"
+    return f"done_{request_type}"       # "done_command"  | "done_query"
+
+
 class GraphWorkflow:
     def __init__(self, nodes: WorkflowNodes) -> None:
         self.nodes = nodes
@@ -21,11 +32,14 @@ class GraphWorkflow:
         graph.add_node("execute_query", self.nodes.execute_query)
         graph.add_node("verify_query", self.nodes.verify_query)
         graph.add_node("interpret_result", self.nodes.interpret_result)
+        graph.add_node("finalize_query_verifier_outcome", self.nodes.finalize_query_verifier_outcome)
         graph.add_node("plan_command", self.nodes.plan_command)
         graph.add_node("wait_for_approval", self.nodes.wait_for_approval)
         graph.add_node("execute_command", self.nodes.execute_command)
         graph.add_node("verify_command", self.nodes.verify_command)
         graph.add_node("respond_command", self.nodes.respond_command)
+        graph.add_node("finalize_command_verifier_outcome", self.nodes.finalize_command_verifier_outcome)
+        graph.add_node("advance_step", self.nodes.advance_step)
 
         graph.add_edge(START, "ingest_request")
         graph.add_edge("ingest_request", "classify_request")
@@ -54,8 +68,19 @@ class GraphWorkflow:
             },
         )
         graph.add_edge("execute_query", "verify_query")
-        graph.add_edge("verify_query", "interpret_result")
+        graph.add_conditional_edges(
+            "verify_query",
+            lambda state: state["verifier_route"],
+            {
+                "retry": "execute_query",
+                "success": "advance_step",
+                "clarify": "finalize_query_verifier_outcome",
+                "escalate": "finalize_query_verifier_outcome",
+                "stop": "finalize_query_verifier_outcome",
+            },
+        )
         graph.add_edge("interpret_result", END)
+        graph.add_edge("finalize_query_verifier_outcome", END)
         graph.add_conditional_edges(
             "plan_command",
             lambda state: "wait_for_approval" if state.get("request_status") == "pending_approval" else "complete",
@@ -73,7 +98,28 @@ class GraphWorkflow:
             },
         )
         graph.add_edge("execute_command", "verify_command")
-        graph.add_edge("verify_command", "respond_command")
+        graph.add_conditional_edges(
+            "verify_command",
+            lambda state: state["verifier_route"],
+            {
+                "retry": "execute_command",
+                "success": "advance_step",
+                "clarify": "finalize_command_verifier_outcome",
+                "escalate": "finalize_command_verifier_outcome",
+                "stop": "finalize_command_verifier_outcome",
+            },
+        )
+        graph.add_conditional_edges(
+            "advance_step",
+            _route_after_advance_step,
+            {
+                "next_command": "execute_command",
+                "next_query": "execute_query",
+                "done_command": "respond_command",
+                "done_query": "interpret_result",
+            },
+        )
         graph.add_edge("respond_command", END)
+        graph.add_edge("finalize_command_verifier_outcome", END)
 
         return graph.compile(checkpointer=checkpointer)

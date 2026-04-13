@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
+
 class GraphState(TypedDict, total=False):
     request_id: int
     session_id: int
@@ -20,6 +21,7 @@ class GraphState(TypedDict, total=False):
     classification_confidence: float
     selected_specialist: str | None
     policy_decision: dict[str, Any] | None
+    verifier_route: str | None
     retry_count: int
     route: str
     selected_operation_ids: list[str]
@@ -54,3 +56,7 @@ class GraphState(TypedDict, total=False):
     verifier_decision: dict[str, Any] | None
     specialist_result: dict[str, Any] | None
     session_summary: dict[str, Any] | None
+    # Multi-step plan tracking (Fix 5)
+    current_step_index: int
+    completed_steps: list[dict[str, Any]]
+    total_steps: int

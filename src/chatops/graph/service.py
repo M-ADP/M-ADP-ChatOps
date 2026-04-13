@@ -4,12 +4,15 @@ import atexit
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Callable
 
 from chatops.common.id_generator import IdGenerator
 from chatops.domain.enums import RequestStatus
 from chatops.graph.nodes import WorkflowNodes
+from chatops.graph.session_message_service import SessionMessageService
 from chatops.graph.state import GraphState
 from chatops.graph.workflow import GraphWorkflow
+from chatops.services.response_streaming import response_stream_handler_context
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
@@ -64,16 +67,35 @@ class GraphService:
         dispatcher = downstream_dispatcher or adapter_service
         if dispatcher is None:
             raise ValueError("downstream dispatcher is required")
+        self.nodes = WorkflowNodes(
+            llm_service=llm_service,
+            registry_service=registry_service,
+            downstream_dispatcher=dispatcher,
+            resolver_service=resolver_service or _NullResolverService(),
+            approval_ttl_seconds=approval_ttl_seconds,
+        )
         self.workflow = GraphWorkflow(
-            WorkflowNodes(
-                llm_service=llm_service,
-                registry_service=registry_service,
-                downstream_dispatcher=dispatcher,
-                resolver_service=resolver_service or _NullResolverService(),
-                approval_ttl_seconds=approval_ttl_seconds,
-            )
+            self.nodes
         ).compile(checkpointer=self.checkpointer)
         atexit.register(self.close)
+
+    def preview_request(
+        self,
+        message_text: str,
+        session_context: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        effective_message_text = SessionMessageService().effective_message_text(
+            {
+                "message_text": message_text,
+                "session_context": session_context,
+            }
+        )
+        classification = self.nodes.llm_service.classify(effective_message_text)
+        return {
+            "request_type": str(classification["request_type"]),
+            "intent": str(classification.get("intent", "")),
+            "effective_message_text": effective_message_text,
+        }
 
     def handle_request(
         self,
@@ -83,8 +105,10 @@ class GraphService:
         user_role: str | None = None,
         org_id: str | None = None,
         session_context: dict[str, object] | None = None,
+        request_id: int | None = None,
+        response_stream_handler: Callable[[str], None] | None = None,
     ) -> GraphResult:
-        request_id = IdGenerator.generate_sonyflake_id()
+        request_id = request_id or IdGenerator.generate_sonyflake_id()
         initial_state: GraphState = {
             "request_id": request_id,
             "session_id": session_id,
@@ -100,7 +124,8 @@ class GraphService:
             "is_ambiguous": False,
             "ambiguity_candidates": [],
         }
-        return self._invoke(initial_state, config=self._thread_config(request_id))
+        with response_stream_handler_context(response_stream_handler):
+            return self._invoke(initial_state, config=self._thread_config(request_id))
 
     def resume_request(
         self,
@@ -111,6 +136,7 @@ class GraphService:
         approval_granted: bool | str = True,
         user_role: str | None = None,
         org_id: str | None = None,
+        response_stream_handler: Callable[[str], None] | None = None,
     ) -> GraphResult:
         fallback_state: GraphState = {
             "request_id": request_id,
@@ -122,7 +148,8 @@ class GraphService:
             "approval_granted": approval_granted,
         }
         config = self._thread_config(request_id)
-        result = self.workflow.invoke(Command(resume=approval_granted), config=config)
+        with response_stream_handler_context(response_stream_handler):
+            result = self.workflow.invoke(Command(resume=approval_granted), config=config)
         return self._build_result(result=result, config=config, fallback_state=fallback_state)
 
     def _invoke(self, initial_state: GraphState, config: dict[str, object]) -> GraphResult:

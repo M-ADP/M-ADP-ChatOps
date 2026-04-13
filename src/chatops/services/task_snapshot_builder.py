@@ -105,6 +105,7 @@ class TaskSnapshotBuilder:
             "executing": "approved",
             "completed": "completed",
             "failed": "failed",
+            "escalated": "failed",
             "rejected": "cancelled",
             "approval_expired": "expired",
         }
@@ -123,6 +124,8 @@ class TaskSnapshotBuilder:
         if request_status == "completed":
             return ["view_result"] if request_type == "command" else ["refine", "compare", "export"]
         if request_status == "failed":
+            return ["retry"]
+        if request_status == "escalated":
             return ["retry"]
         if request_status == "rejected":
             return ["retry"]
