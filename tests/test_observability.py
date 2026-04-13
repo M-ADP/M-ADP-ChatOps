@@ -147,7 +147,9 @@ def test_downstream_execution_logs_include_fallback_and_request_context(caplog) 
         message_text="앱 로그 보여줘",
     )
 
-    assert result.status == "failed"
+    assert result.status == "input_required"
+    assert result.verifier_decision is not None
+    assert result.verifier_decision["decision"] == "clarify"
     execution_logs = [record for record in caplog.records if record.getMessage().startswith("downstream_execution ")]
     assert execution_logs
     payload = _parse_log_json(execution_logs[-1])

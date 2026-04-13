@@ -13,7 +13,7 @@ def test_main_imports_without_explicit_pythonpath() -> None:
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
     env["DATABASE_URL"] = "sqlite:////tmp/madp_chatops_entrypoint.db"
-    env["GROQ_API_KEY"] = "test-groq-api-key"
+    env["BEDROCK_MODEL_ID"] = "amazon.nova-2-lite-v1:0"
 
     completed = subprocess.run(
         [sys.executable, "-c", "import main; print(type(main.app).__name__)"],

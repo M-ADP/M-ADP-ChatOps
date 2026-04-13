@@ -40,6 +40,50 @@ class StubGraphService:
         )
 
 
+class StreamingStubGraphService:
+    def preview_request(
+        self,
+        message_text: str,
+        session_context: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del session_context
+        return {
+            "request_type": "inquiry",
+            "effective_message_text": message_text,
+            "intent": "answer_inquiry",
+        }
+
+    def handle_request(
+        self,
+        session_id: int,
+        user_id: str,
+        message_text: str,
+        user_role: str | None = None,
+        org_id: str | None = None,
+        session_context: dict[str, object] | None = None,
+        request_id: int | None = None,
+        response_stream_handler=None,
+    ) -> GraphResult:
+        del user_role, org_id, session_context
+        time.sleep(0.2)
+        if response_stream_handler is not None:
+            response_stream_handler("문의 ")
+            time.sleep(0.05)
+            response_stream_handler("응답")
+        return GraphResult(
+            request_id=request_id or 7001,
+            session_id=session_id,
+            user_id=user_id,
+            status="completed",
+            request_type="inquiry",
+            requires_approval=False,
+            intent="answer_inquiry",
+            final_response=f"{message_text} 문의 응답",
+            selected_operation_ids=[],
+            missing_inputs=None,
+        )
+
+
 @pytest.fixture()
 def client(db_session):
     app = create_app()
@@ -193,3 +237,50 @@ def test_request_stream_follow_waits_for_future_events(client: TestClient, db_se
     assert response.status_code == 200
     assert "event: response.delta" in body
     assert '"text": "50%"' in body
+
+
+def test_create_request_returns_immediately_and_streams_ai_deltas(db_session) -> None:
+    app = create_app()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return StreamingStubGraphService()
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        started_at = time.monotonic()
+        create_response = client.post(
+            f"/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "배포 방법 알려줘"},
+        )
+        elapsed = time.monotonic() - started_at
+        request_id = create_response.json()["request_id"]
+
+        with client.stream(
+            "GET",
+            f"/sessions/{session['session_id']}/requests/{request_id}/stream",
+            headers={"X-User-Id": "user-1"},
+            params={"follow": "true"},
+        ) as response:
+            body = response.read().decode()
+
+    app.dependency_overrides.clear()
+
+    assert create_response.status_code == 202
+    assert elapsed < 0.15
+    assert "event: request.created" in body
+    assert "event: response.delta" in body
+    assert '"text": "문의 "' in body
+    assert '"text": "응답"' in body
+    assert "event: response.completed" in body

@@ -15,7 +15,7 @@ def test_alembic_upgrade_head_runs(tmp_path: Path) -> None:
     database_path = tmp_path / "chatops.db"
     env = os.environ.copy()
     env["DATABASE_URL"] = f"sqlite:///{database_path}"
-    env["GROQ_API_KEY"] = "test-groq-api-key"
+    env["BEDROCK_MODEL_ID"] = "amazon.nova-2-lite-v1:0"
 
     completed = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
