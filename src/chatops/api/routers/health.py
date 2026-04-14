@@ -1,7 +1,8 @@
 from fastapi import APIRouter
 
+from chatops.common.logging.audit import AuditRoute
 
-router = APIRouter()
+router = APIRouter(route_class=AuditRoute)
 
 
 @router.get("/")

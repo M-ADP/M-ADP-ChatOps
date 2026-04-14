@@ -263,9 +263,10 @@ def test_request_schemas_and_auth_context_match_contract() -> None:
 
 
 def test_openapi_does_not_expose_request_or_org_headers(client: TestClient) -> None:
-    response = client.get("/openapi.json")
+    response = client.get("/chatops/openapi.json")
 
     assert response.status_code == 200
+    assert client.get("/openapi.json").status_code == 404
     payload = response.json()
     for path_item in payload["paths"].values():
         for operation in path_item.values():
@@ -281,7 +282,7 @@ def test_openapi_does_not_expose_request_or_org_headers(client: TestClient) -> N
 
 
 def test_openapi_exposes_component_examples_for_apidog_import(client: TestClient) -> None:
-    response = client.get("/openapi.json")
+    response = client.get("/chatops/openapi.json")
 
     assert response.status_code == 200
     schemas = response.json()["components"]["schemas"]

@@ -11,6 +11,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session, sessionmaker
 
 from chatops.api.dependencies import get_auth_context, get_db_session, get_graph_service
+from chatops.common.logging.audit import AuditRoute
 from chatops.common.id_generator import IdGenerator
 from chatops.common.config.settings import get_app_config
 from chatops.db.models import RequestRecord
@@ -35,7 +36,7 @@ from chatops.services.session_messages import SessionMessageService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/sessions/{session_id}/requests", tags=["requests"])
+router = APIRouter(prefix="/sessions/{session_id}/requests", tags=["requests"], route_class=AuditRoute)
 entity_memory_service = EntityMemoryService()
 session_summary_service = SessionSummaryService()
 

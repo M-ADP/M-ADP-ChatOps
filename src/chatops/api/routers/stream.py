@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, sessionmaker
 
 from chatops.api.dependencies import get_auth_context, get_db_session
+from chatops.common.logging.audit import AuditRoute
 from chatops.common.config.settings import get_app_config
 from chatops.db.models import RequestRecord
 from chatops.db.repositories import RequestRepository, SessionRepository
@@ -15,7 +16,7 @@ from chatops.schemas.auth import AuthContext
 from chatops.services.events import EventService
 
 
-router = APIRouter(prefix="/sessions/{session_id}/requests", tags=["stream"])
+router = APIRouter(prefix="/sessions/{session_id}/requests", tags=["stream"], route_class=AuditRoute)
 
 
 def _format_sse_body(events) -> str:

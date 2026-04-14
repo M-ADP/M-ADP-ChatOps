@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import logging
 
 import pytest
 from fastapi import HTTPException
@@ -107,6 +108,27 @@ def test_create_session_returns_owned_session(client: TestClient) -> None:
     assert isinstance(body["session_id"], int)
     assert body["user_id"] == "user-1"
     assert body["status"] == "active"
+
+
+def test_create_session_emits_action_audit_log(client: TestClient, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="chatops.actions")
+
+    response = client.post(
+        "/chatops/sessions",
+        headers={"X-User-Id": "user-1"},
+        json={"title": "운영 세션"},
+    )
+
+    assert response.status_code == 201
+    action_logs = [record for record in caplog.records if record.name == "chatops.actions"]
+    assert action_logs
+    payload = json.loads(action_logs[-1].getMessage().split(" ", 1)[1])
+    assert payload["category"] == "action"
+    assert payload["action"] == "create_session"
+    assert payload["method"] == "POST"
+    assert payload["path"] == "/chatops/sessions"
+    assert payload["status_code"] == 201
+    assert payload["user_id"] == "user-1"
 
 
 def test_sessions_preflight_allows_any_origin(client: TestClient) -> None:

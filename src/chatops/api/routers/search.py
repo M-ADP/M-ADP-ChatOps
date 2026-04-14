@@ -5,12 +5,13 @@ from sqlalchemy.orm import Session
 
 from chatops.api.dependencies import get_auth_context, get_db_session
 from chatops.api.routers.requests import _build_request_response
+from chatops.common.logging.audit import AuditRoute
 from chatops.db.repositories import RequestRepository
 from chatops.schemas.auth import AuthContext
 from chatops.schemas.requests import RequestListResponse
 
 
-router = APIRouter(tags=["search"])
+router = APIRouter(tags=["search"], route_class=AuditRoute)
 
 
 @router.get("/requests/search", response_model=RequestListResponse)

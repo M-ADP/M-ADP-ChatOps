@@ -8,6 +8,7 @@ from chatops.api.routers.requests import (
     _build_request_response,
     create_request as create_request_resource,
 )
+from chatops.common.logging.audit import AuditRoute
 from chatops.db.repositories import MessageRepository, RequestRepository, SessionRepository
 from chatops.graph.service import GraphService
 from chatops.schemas.auth import AuthContext
@@ -26,7 +27,7 @@ from chatops.schemas.sessions import (
 from chatops.services.session_messages import SessionMessageService
 
 
-router = APIRouter(prefix="/sessions", tags=["sessions"])
+router = APIRouter(prefix="/sessions", tags=["sessions"], route_class=AuditRoute)
 
 
 def _build_session_response(record) -> SessionResponse:
