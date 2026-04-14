@@ -97,7 +97,7 @@ def test_session_schemas_use_api_contract_fields() -> None:
 
 def test_create_session_returns_owned_session(client: TestClient) -> None:
     response = client.post(
-        "/sessions",
+        "/chatops/sessions",
         headers={"X-User-Id": "user-1"},
         json={"title": "운영 세션"},
     )
@@ -111,7 +111,7 @@ def test_create_session_returns_owned_session(client: TestClient) -> None:
 
 def test_sessions_preflight_allows_any_origin(client: TestClient) -> None:
     response = client.options(
-        "/sessions",
+        "/chatops/sessions",
         headers={
             "Origin": "https://frontend.example.com",
             "Access-Control-Request-Method": "POST",
@@ -180,7 +180,7 @@ def test_list_sessions_returns_last_message_preview_and_cursor(client: TestClien
     )
 
     response = client.get(
-        "/sessions?limit=2",
+        "/chatops/sessions?limit=2",
         headers={"X-User-Id": "user-1"},
     )
 
@@ -226,7 +226,7 @@ def test_get_session_returns_recent_messages_with_cursor(client: TestClient, db_
     )
 
     response = client.get(
-        f"/sessions/{session.id}?limit=2",
+        f"/chatops/sessions/{session.id}?limit=2",
         headers={"X-User-Id": "user-1"},
     )
 
@@ -259,11 +259,11 @@ def test_get_session_messages_paginates_older_history(client: TestClient, db_ses
     )
 
     latest = client.get(
-        f"/sessions/{session.id}?limit=2",
+        f"/chatops/sessions/{session.id}?limit=2",
         headers={"X-User-Id": "user-1"},
     )
     older = client.get(
-        f"/sessions/{session.id}/messages?before={latest.json()['next_cursor']}&limit=2",
+        f"/chatops/sessions/{session.id}/messages?before={latest.json()['next_cursor']}&limit=2",
         headers={"X-User-Id": "user-1"},
     )
 
@@ -285,7 +285,7 @@ def test_session_history_returns_requests_in_chronological_order(client: TestCli
     db_session.commit()
 
     response = client.get(
-        f"/sessions/{session.id}/history",
+        f"/chatops/sessions/{session.id}/history",
         headers={"X-User-Id": "user-1"},
     )
 
@@ -314,13 +314,13 @@ def test_post_session_message_returns_user_and_assistant_messages(db_session) ->
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={"title": "메시지 전송"},
         ).json()
 
         response = client.post(
-            f"/sessions/{session['session_id']}/messages",
+            f"/chatops/sessions/{session['session_id']}/messages",
             headers={"X-User-Id": "user-1", "X-User-Role": "admin"},
             json={"message": "demo 프로젝트에 api 앱 만들어줘"},
         )
@@ -382,7 +382,7 @@ def test_get_session_projects_runtime_metadata_into_assistant_message(client: Te
     )
 
     response = client.get(
-        f"/sessions/{session.id}?limit=10",
+        f"/chatops/sessions/{session.id}?limit=10",
         headers={"X-User-Id": "user-1"},
     )
 

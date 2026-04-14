@@ -156,7 +156,7 @@ def test_create_request_passes_session_summary_memory_into_graph_context(db_sess
 
     with TestClient(app) as client:
         response = client.post(
-            f"/sessions/{session.id}/requests",
+            f"/chatops/sessions/{session.id}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "GitHub도 연결해줘"},
         )

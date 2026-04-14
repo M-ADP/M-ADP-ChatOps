@@ -149,7 +149,7 @@ def test_request_stream_replays_events_after_sequence(client: TestClient, db_ses
     )
 
     response = client.get(
-        f"/sessions/{session.id}/requests/{request.id}/stream",
+        f"/chatops/sessions/{session.id}/requests/{request.id}/stream",
         headers={"X-User-Id": "user-1", "Last-Event-ID": "1"},
     )
 
@@ -163,20 +163,20 @@ def test_request_stream_replays_events_after_sequence(client: TestClient, db_ses
 
 def test_create_request_emits_initial_events(client: TestClient) -> None:
     session = client.post(
-        "/sessions",
+        "/chatops/sessions",
         headers={"X-User-Id": "user-1"},
         json={},
     ).json()
 
     create_response = client.post(
-        f"/sessions/{session['session_id']}/requests",
+        f"/chatops/sessions/{session['session_id']}/requests",
         headers={"X-User-Id": "user-1"},
         json={"message": "프로젝트 생성해줘"},
     )
     request_id = create_response.json()["request_id"]
 
     stream_response = client.get(
-        f"/sessions/{session['session_id']}/requests/{request_id}/stream",
+        f"/chatops/sessions/{session['session_id']}/requests/{request_id}/stream",
         headers={"X-User-Id": "user-1"},
     )
 
@@ -226,7 +226,7 @@ def test_request_stream_follow_waits_for_future_events(client: TestClient, db_se
     try:
         with client.stream(
             "GET",
-            f"/sessions/{session.id}/requests/{request.id}/stream",
+            f"/chatops/sessions/{session.id}/requests/{request.id}/stream",
             headers={"X-User-Id": "user-1"},
             params={"follow": "true"},
         ) as response:
@@ -253,14 +253,14 @@ def test_create_request_returns_immediately_and_streams_ai_deltas(db_session) ->
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
 
         started_at = time.monotonic()
         create_response = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "배포 방법 알려줘"},
         )
@@ -269,7 +269,7 @@ def test_create_request_returns_immediately_and_streams_ai_deltas(db_session) ->
 
         with client.stream(
             "GET",
-            f"/sessions/{session['session_id']}/requests/{request_id}/stream",
+            f"/chatops/sessions/{session['session_id']}/requests/{request_id}/stream",
             headers={"X-User-Id": "user-1"},
             params={"follow": "true"},
         ) as response:

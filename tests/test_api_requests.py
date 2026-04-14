@@ -311,13 +311,13 @@ def test_openapi_exposes_component_examples_for_apidog_import(client: TestClient
 
 def test_create_request_returns_processing_status(client: TestClient) -> None:
     session = client.post(
-        "/sessions",
+        "/chatops/sessions",
         headers={"X-User-Id": "user-1"},
         json={},
     ).json()
 
     response = client.post(
-        f"/sessions/{session['session_id']}/requests",
+        f"/chatops/sessions/{session['session_id']}/requests",
         headers={"X-User-Id": "user-1"},
         json={"message": "프로젝트 생성해줘"},
     )
@@ -350,19 +350,19 @@ def test_request_responses_include_task_snapshot(db_session) -> None:
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
 
         created = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "프로젝트 생성해줘"},
         )
         request_id = created.json()["request_id"]
         fetched = client.get(
-            f"/sessions/{session['session_id']}/requests/{request_id}",
+            f"/chatops/sessions/{session['session_id']}/requests/{request_id}",
             headers={"X-User-Id": "user-1"},
         )
 
@@ -443,13 +443,13 @@ def test_create_request_persists_runtime_metadata(db_session) -> None:
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={"title": "runtime"},
         ).json()
 
         created = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "demo 프로젝트에 api 앱 만들어줘"},
         )
@@ -503,13 +503,13 @@ def test_create_request_builds_rich_session_summary_from_resolved_ids(db_session
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={"title": "runtime"},
         ).json()
 
         created = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "demo 프로젝트에 api 앱 만들어줘"},
         )
@@ -543,20 +543,20 @@ def test_create_request_returns_missing_inputs_when_command_needs_more_values(db
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
 
         response = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "프로젝트 수정해줘"},
         )
 
         request_id = response.json()["request_id"]
         detail = client.get(
-            f"/sessions/{session['session_id']}/requests/{request_id}",
+            f"/chatops/sessions/{session['session_id']}/requests/{request_id}",
             headers={"X-User-Id": "user-1"},
         )
 
@@ -586,7 +586,7 @@ def test_create_request_passes_previous_session_message_as_context(db_session) -
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
@@ -602,7 +602,7 @@ def test_create_request_passes_previous_session_message_as_context(db_session) -
         )
 
         response = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "그거 이름은 chatops-renamed로 바꿔줘"},
         )
@@ -636,7 +636,7 @@ def test_create_request_passes_input_required_context_for_follow_up(db_session) 
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
@@ -656,7 +656,7 @@ def test_create_request_passes_input_required_context_for_follow_up(db_session) 
         db_session.commit()
 
         response = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "이름은 demo야"},
         )
@@ -695,20 +695,20 @@ def test_create_request_passes_last_effective_message_text_for_multi_turn_follow
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
 
         first = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "이름은 demo야 cpu는 1이야"},
         )
         assert first.status_code == 202
 
         second = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "메모리는 0.5야 디스크는 10이야"},
         )
@@ -750,20 +750,20 @@ def test_natural_language_approve_triggers_execution(db_session) -> None:
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
 
         first = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "프로젝트 생성해줘 name=demo max_cpu=1 max_memory=0.5 max_disk=10"},
         )
         assert first.json()["status"] == "pending_approval"
 
         second = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "실행해"},
         )
@@ -791,20 +791,20 @@ def test_natural_language_reject_cancels_pending_command(db_session) -> None:
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
 
         first = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "프로젝트 생성해줘 name=demo max_cpu=1 max_memory=0.5 max_disk=10"},
         )
         assert first.json()["status"] == "pending_approval"
 
         second = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "취소해"},
         )
@@ -818,18 +818,18 @@ def test_natural_language_reject_cancels_pending_command(db_session) -> None:
 
 def test_approve_request_resumes_pending_command(client: TestClient) -> None:
     session = client.post(
-        "/sessions",
+        "/chatops/sessions",
         headers={"X-User-Id": "user-1"},
         json={},
     ).json()
     request = client.post(
-        f"/sessions/{session['session_id']}/requests",
+        f"/chatops/sessions/{session['session_id']}/requests",
         headers={"X-User-Id": "user-1"},
         json={"message": "프로젝트 생성해줘"},
     ).json()
 
     response = client.post(
-        f"/sessions/{session['session_id']}/requests/{request['request_id']}/approve",
+        f"/chatops/sessions/{session['session_id']}/requests/{request['request_id']}/approve",
         headers={"X-User-Id": "user-1"},
     )
 
@@ -869,18 +869,18 @@ def test_approve_request_returns_updated_task_snapshot(db_session) -> None:
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
         request = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "프로젝트 생성해줘"},
         ).json()
 
         response = client.post(
-            f"/sessions/{session['session_id']}/requests/{request['request_id']}/approve",
+            f"/chatops/sessions/{session['session_id']}/requests/{request['request_id']}/approve",
             headers={"X-User-Id": "user-1"},
         )
 
@@ -935,7 +935,7 @@ def test_pending_high_risk_request_accepts_exact_name_reply(db_session) -> None:
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
@@ -951,7 +951,7 @@ def test_pending_high_risk_request_accepts_exact_name_reply(db_session) -> None:
         db_session.commit()
 
         response = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "demo"},
         )
@@ -978,13 +978,13 @@ def test_correction_supersedes_previous_pending_request_and_blocks_old_approval(
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
 
         first = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "프로젝트 생성해줘 name=demo max_cpu=1 max_memory=0.5 max_disk=10"},
         )
@@ -992,7 +992,7 @@ def test_correction_supersedes_previous_pending_request_and_blocks_old_approval(
         assert first.json()["status"] == "pending_approval"
 
         second = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "아니 cpu는 2로 바꿔줘"},
         )
@@ -1008,11 +1008,11 @@ def test_correction_supersedes_previous_pending_request_and_blocks_old_approval(
         assert second_record.status == "pending_approval"
 
         stale_approval = client.post(
-            f"/sessions/{session['session_id']}/requests/{first_record.id}/approve",
+            f"/chatops/sessions/{session['session_id']}/requests/{first_record.id}/approve",
             headers={"X-User-Id": "user-1"},
         )
         fresh_approval = client.post(
-            f"/sessions/{session['session_id']}/requests/{second_record.id}/approve",
+            f"/chatops/sessions/{session['session_id']}/requests/{second_record.id}/approve",
             headers={"X-User-Id": "user-1"},
         )
 
@@ -1025,22 +1025,22 @@ def test_correction_supersedes_previous_pending_request_and_blocks_old_approval(
 
 def test_reject_request_emits_rejected_event(client: TestClient) -> None:
     session = client.post(
-        "/sessions",
+        "/chatops/sessions",
         headers={"X-User-Id": "user-1"},
         json={},
     ).json()
     request = client.post(
-        f"/sessions/{session['session_id']}/requests",
+        f"/chatops/sessions/{session['session_id']}/requests",
         headers={"X-User-Id": "user-1"},
         json={"message": "프로젝트 생성해줘"},
     ).json()
 
     response = client.post(
-        f"/sessions/{session['session_id']}/requests/{request['request_id']}/reject",
+        f"/chatops/sessions/{session['session_id']}/requests/{request['request_id']}/reject",
         headers={"X-User-Id": "user-1"},
     )
     stream_response = client.get(
-        f"/sessions/{session['session_id']}/requests/{request['request_id']}/stream",
+        f"/chatops/sessions/{session['session_id']}/requests/{request['request_id']}/stream",
         headers={"X-User-Id": "user-1"},
     )
 
@@ -1059,7 +1059,7 @@ def test_list_requests_returns_session_requests_in_desc_order(client: TestClient
     db_session.commit()
 
     response = client.get(
-        f"/sessions/{session.id}/requests",
+        f"/chatops/sessions/{session.id}/requests",
         headers={"X-User-Id": "user-1"},
     )
 
@@ -1079,7 +1079,7 @@ def test_list_requests_filters_by_query_text(client: TestClient, db_session) -> 
     db_session.commit()
 
     response = client.get(
-        f"/sessions/{session.id}/requests",
+        f"/chatops/sessions/{session.id}/requests",
         headers={"X-User-Id": "user-1"},
         params={"q": "cpu"},
     )
@@ -1116,7 +1116,7 @@ def test_list_request_events_returns_timeline_for_request(client: TestClient, db
     db_session.commit()
 
     response = client.get(
-        f"/sessions/{session.id}/requests/{request.id}/events",
+        f"/chatops/sessions/{session.id}/requests/{request.id}/events",
         headers={"X-User-Id": "user-1"},
     )
 
@@ -1139,7 +1139,7 @@ def test_request_search_finds_message_and_response_text(client: TestClient, db_s
     db_session.commit()
 
     response = client.get(
-        "/requests/search",
+        "/chatops/requests/search",
         headers={"X-User-Id": "user-1"},
         params={"query": "로그"},
     )
@@ -1173,12 +1173,12 @@ def test_create_request_emits_task_snapshot_in_events(db_session) -> None:
 
     with TestClient(app) as client:
         session = client.post(
-            "/sessions",
+            "/chatops/sessions",
             headers={"X-User-Id": "user-1"},
             json={},
         ).json()
         request = client.post(
-            f"/sessions/{session['session_id']}/requests",
+            f"/chatops/sessions/{session['session_id']}/requests",
             headers={"X-User-Id": "user-1"},
             json={"message": "프로젝트 생성해줘"},
         ).json()
