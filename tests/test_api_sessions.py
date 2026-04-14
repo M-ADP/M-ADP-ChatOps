@@ -109,6 +109,20 @@ def test_create_session_returns_owned_session(client: TestClient) -> None:
     assert body["status"] == "active"
 
 
+def test_sessions_preflight_allows_any_origin(client: TestClient) -> None:
+    response = client.options(
+        "/sessions",
+        headers={
+            "Origin": "https://frontend.example.com",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert "POST" in response.headers["access-control-allow-methods"]
+
+
 def _store_request(
     db_session,
     *,
