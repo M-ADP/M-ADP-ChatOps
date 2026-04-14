@@ -67,6 +67,28 @@ def test_legacy_settings_bridge_common_config_components() -> None:
     assert settings.application_server_base_url == "http://localhost:8003"
 
 
+def test_database_config_normalizes_host_only_database_url() -> None:
+    config = DatabaseConfig(
+        _env_file=None,
+        database_url="postgres.postgres.svc.cluster.local",
+    )
+
+    assert (
+        config.url
+        == "postgresql+psycopg://postgres:postgres@postgres.postgres.svc.cluster.local:5432/madp_chatops"
+    )
+
+
+def test_database_config_preserves_full_database_url() -> None:
+    expected = "postgresql+psycopg://user:secret@db.example.com:5432/chatops"
+    config = DatabaseConfig(
+        _env_file=None,
+        database_url=expected,
+    )
+
+    assert config.url == expected
+
+
 def test_requirements_include_runtime_dependencies() -> None:
     lines = {
         line.strip()

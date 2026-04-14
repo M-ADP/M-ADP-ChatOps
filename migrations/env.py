@@ -16,6 +16,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from chatops.config import resolve_env_file
+from chatops.common.config.settings import normalize_database_url
 from chatops.db.base import Base
 from chatops.db import models  # noqa: F401
 
@@ -40,10 +41,10 @@ if config.config_file_name is not None:
 def resolve_database_url() -> str:
     configured_url = config.get_main_option("sqlalchemy.url")
     if configured_url:
-        return configured_url
+        return normalize_database_url(configured_url)
 
     try:
-        return MigrationSettings().database_url
+        return normalize_database_url(MigrationSettings().database_url)
     except ValidationError as exc:
         raise RuntimeError("DATABASE_URL 설정이 필요합니다.") from exc
 
