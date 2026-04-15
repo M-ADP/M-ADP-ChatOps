@@ -869,6 +869,43 @@ def test_create_request_rewrites_single_missing_input_follow_up_before_graph(db_
     assert stub_graph_service.last_message_text == "project_name=killblack"
 
 
+def test_create_request_handles_small_talk_without_graph_execution(db_session) -> None:
+    app = create_app()
+    stub_graph_service = StubGraphService()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return stub_graph_service
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/chatops/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        response = client.post(
+            f"/chatops/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "안녕"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["request_type"] == "inquiry"
+    assert body["assistant_message"] is not None
+    assert "안녕하세요" in body["assistant_message"]
+    assert stub_graph_service.last_message_text is None
+
+
 def test_natural_language_approve_triggers_execution(db_session) -> None:
     """사용자가 '실행해'라고 말하면 pending_approval 요청이 승인된다."""
     app = create_app()

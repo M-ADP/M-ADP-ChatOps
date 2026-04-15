@@ -29,6 +29,7 @@ from chatops.schemas.requests import (
     RequestResponse,
 )
 from chatops.services.approval_intent import ApprovalIntent, detect_approval_intent
+from chatops.services.conversation_router import ConversationRouterService
 from chatops.services.entity_memory_service import EntityMemoryService
 from chatops.services.events import EventService
 from chatops.services.follow_up_interpreter import FollowUpInterpreterService
@@ -41,6 +42,7 @@ router = APIRouter(prefix="/sessions/{session_id}/requests", tags=["requests"], 
 entity_memory_service = EntityMemoryService()
 session_summary_service = SessionSummaryService()
 follow_up_interpreter = FollowUpInterpreterService()
+conversation_router = ConversationRouterService()
 
 
 # ──────────────────────────────────────────────────
@@ -899,6 +901,56 @@ def create_request(
     )
     if rewritten_follow_up is not None:
         graph_message_text = rewritten_follow_up.message_text
+
+    route_decision = conversation_router.decide(
+        message_text=graph_message_text,
+        session_context=session_context,
+    )
+    if rewritten_follow_up is None and route_decision.route in {"small_talk", "bridge"}:
+        request_id = IdGenerator.generate_sonyflake_id()
+        record = repo.create(
+            request_id=request_id,
+            session_id=session_id,
+            user_id=auth.user_id,
+            message_text=payload.message,
+            effective_message_text=graph_message_text,
+            request_type="inquiry",
+            requires_approval=False,
+        )
+        record.status = RequestStatus.COMPLETED.value
+        record.final_response = route_decision.response
+        if superseded_request is not None:
+            _supersede_pending_request(superseded_request, replacement_request_id=record.id)
+        db_session.commit()
+        db_session.refresh(record)
+        event_service = EventService(db_session)
+        _append_request_created_event(event_service, record=record)
+        _append_context_hydrated_event(
+            event_service,
+            record=record,
+            session_context=session_context,
+        )
+        _append_structured_event(
+            event_service,
+            request_id=record.id,
+            session_id=record.session_id,
+            event_type="response.completed",
+            phase="response",
+            step="completed",
+            message="대화 응답을 생성했습니다.",
+            status_value=record.status,
+            progress=100,
+            payload={"final_response": record.final_response, "task": None},
+        )
+        _append_user_message(
+            db_session,
+            session_id=record.session_id,
+            request_id=record.id,
+            user_id=auth.user_id,
+            message_text=payload.message,
+        )
+        _sync_assistant_message(db_session, record)
+        return _build_request_response(record, record.message_text)
 
     preview = _preview_request(
         graph_service,
