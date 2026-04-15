@@ -12,6 +12,7 @@ from chatops.graph.nodes import WorkflowNodes
 from chatops.graph.session_message_service import SessionMessageService
 from chatops.graph.state import GraphState
 from chatops.graph.workflow import GraphWorkflow
+from chatops.services.decision_trace import log_decision_trace
 from chatops.services.response_streaming import response_stream_handler_context
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -91,6 +92,16 @@ class GraphService:
             }
         )
         classification = self.nodes.llm_service.classify(effective_message_text)
+        log_decision_trace(
+            stage="preview_request",
+            decision=str(classification["request_type"]),
+            reason="preview classification completed",
+            data={
+                "message_text": message_text,
+                "effective_message_text": effective_message_text,
+                "intent": str(classification.get("intent", "")),
+            },
+        )
         return {
             "request_type": str(classification["request_type"]),
             "intent": str(classification.get("intent", "")),

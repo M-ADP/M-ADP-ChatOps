@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import re
 from typing import Any
 
+from chatops.services.decision_trace import log_decision_trace
 
 CHOICE_NUMBER_PATTERN = re.compile(r"^(?P<value>\d+)(?:번)?$")
 CHOICE_LETTER_PATTERN = re.compile(r"^(?P<value>[a-z])$", re.IGNORECASE)
@@ -38,10 +39,45 @@ class FollowUpInterpreterService:
 
         prompt_kind = str(follow_up_prompt.get("kind") or "")
         if previous_request_status == "ambiguous" and prompt_kind == "choice":
-            return self._rewrite_choice(message_text=message_text, session_context=session_context, prompt=follow_up_prompt)
+            rewrite = self._rewrite_choice(message_text=message_text, session_context=session_context, prompt=follow_up_prompt)
+            self._log_rewrite(
+                previous_request_status=previous_request_status,
+                prompt_kind=prompt_kind,
+                original_message=message_text,
+                rewrite=rewrite,
+            )
+            return rewrite
         if previous_request_status == "input_required" and prompt_kind == "missing_input":
-            return self._rewrite_missing_input(message_text=message_text, prompt=follow_up_prompt)
+            rewrite = self._rewrite_missing_input(message_text=message_text, prompt=follow_up_prompt)
+            self._log_rewrite(
+                previous_request_status=previous_request_status,
+                prompt_kind=prompt_kind,
+                original_message=message_text,
+                rewrite=rewrite,
+            )
+            return rewrite
         return None
+
+    @staticmethod
+    def _log_rewrite(
+        *,
+        previous_request_status: str | None,
+        prompt_kind: str,
+        original_message: str,
+        rewrite: FollowUpRewrite | None,
+    ) -> None:
+        log_decision_trace(
+            stage="follow_up_interpreter",
+            decision="rewritten" if rewrite is not None else "skipped",
+            reason="follow-up prompt evaluated",
+            data={
+                "previous_request_status": previous_request_status,
+                "prompt_kind": prompt_kind,
+                "original_message": original_message,
+                "rewrite_kind": rewrite.kind if rewrite is not None else None,
+                "rewritten_message": rewrite.message_text if rewrite is not None else None,
+            },
+        )
 
     def _rewrite_choice(
         self,

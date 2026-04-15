@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from chatops.services.decision_trace import log_decision_trace
+
 # operation별 응답에 반드시 있어야 할 최소 필드
 _EXPECTED_FIELDS: dict[str, list[str]] = {
     "project.get": ["id", "name"],
@@ -31,6 +33,12 @@ class VerifierService:
     ) -> dict[str, object]:
         del request_type
         result = execution_result or {}
+        trace_data = {
+            "operation_id": operation_id,
+            "status_code": int(result.get("status_code", 200)),
+            "success": result.get("success"),
+            "summary": result.get("summary"),
+        }
 
         # 1. LLM verifier (컨텍스트 포함)
         if hasattr(self.llm_service, "verify_execution"):
@@ -40,6 +48,12 @@ class VerifierService:
                 message_text=message_text,
             )
             if isinstance(decision, dict):
+                log_decision_trace(
+                    stage="verifier",
+                    decision=str(decision.get("decision") or "unknown"),
+                    reason="llm verifier decision",
+                    data={**trace_data, "follow_up_action": decision.get("follow_up_action")},
+                )
                 return decision
 
         # 2. 의미론적 검증 (success=True여도 데이터 품질 확인)
@@ -49,10 +63,23 @@ class VerifierService:
                 operation_id=operation_id,
             )
             if semantic is not None:
+                log_decision_trace(
+                    stage="verifier",
+                    decision=str(semantic.get("decision") or "unknown"),
+                    reason="semantic quality verifier decision",
+                    data={**trace_data, "follow_up_action": semantic.get("follow_up_action")},
+                )
                 return semantic
 
         # 3. status_code 기반 검증 (기존 로직)
-        return self._status_code_based_verify(result)
+        decision = self._status_code_based_verify(result)
+        log_decision_trace(
+            stage="verifier",
+            decision=str(decision.get("decision") or "unknown"),
+            reason="status code based verifier decision",
+            data={**trace_data, "follow_up_action": decision.get("follow_up_action")},
+        )
+        return decision
 
     # ──────────────────────────────────────────────────
     # Private helpers

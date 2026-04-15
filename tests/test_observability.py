@@ -227,3 +227,22 @@ def test_event_service_append_audit_event_includes_normalized_context(db_session
     assert payload["status_code"] == 404
     assert payload["fallback_used"] is True
     assert "clarification_type" in payload
+
+
+def test_preview_request_logs_classification_trace(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="chatops.decision_trace")
+    graph_service = GraphService(
+        llm_service=_FakeLLMService(),
+        registry_service=_FallbackRegistryService(),
+        adapter_service=_FallbackDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    preview = graph_service.preview_request("앱 로그 보여줘")
+
+    assert preview["request_type"] == "query"
+    trace_logs = [record for record in caplog.records if record.name == "chatops.decision_trace"]
+    payloads = [_parse_log_json(record) for record in trace_logs]
+    preview_payload = next(payload for payload in payloads if payload["stage"] == "preview_request")
+    assert preview_payload["decision"] == "query"
+    assert preview_payload["data"]["intent"] == "query_status"

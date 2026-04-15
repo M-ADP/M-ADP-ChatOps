@@ -4,6 +4,7 @@ import json
 import time
 from datetime import datetime, timezone
 from dataclasses import dataclass
+import logging
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1008,6 +1009,113 @@ def test_create_request_handles_small_talk_without_graph_execution(db_session) -
     assert body["assistant_message"] is not None
     assert "안녕하세요" in body["assistant_message"]
     assert stub_graph_service.last_message_text is None
+
+
+def test_create_request_logs_small_talk_route_trace(db_session, caplog) -> None:
+    app = create_app()
+    stub_graph_service = StubGraphService()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return stub_graph_service
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+    caplog.set_level(logging.INFO, logger="chatops.decision_trace")
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/chatops/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        response = client.post(
+            f"/chatops/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "안녕"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    trace_logs = [record for record in caplog.records if record.name == "chatops.decision_trace"]
+    payloads = [json.loads(record.getMessage().split(" ", 1)[1]) for record in trace_logs]
+    router_payload = next(payload for payload in payloads if payload["stage"] == "conversation_router")
+    assert router_payload["decision"] == "small_talk"
+    assert router_payload["data"]["message_text"] == "안녕"
+
+
+def test_create_request_logs_follow_up_rewrite_trace(db_session, caplog) -> None:
+    app = create_app()
+    stub_graph_service = StubGraphService()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return stub_graph_service
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+    caplog.set_level(logging.INFO, logger="chatops.decision_trace")
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/chatops/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        repo = RequestRepository(db_session)
+        request = repo.create(
+            session_id=session["session_id"],
+            user_id="user-1",
+            message_text="애플리케이션 생성해줘",
+            effective_message_text="애플리케이션 생성해줘",
+            request_id=3201,
+            request_type="command",
+            requires_approval=False,
+        )
+        request.status = "input_required"
+        request.missing_inputs = '["project_name"]'
+        request.task_snapshot = json.dumps(
+            {
+                "kind": "operation",
+                "title": "애플리케이션 생성",
+                "status": "input_required",
+                "request_type": "command",
+                "approval_state": "not_ready",
+                "next_actions": ["fill_inputs", "cancel"],
+                "clarification_type": "missing_input",
+                "missing_inputs": [{"key": "project_name", "label": "대상 프로젝트"}],
+                "follow_up_prompt": {
+                    "kind": "missing_input",
+                    "fields": [{"key": "project_name", "label": "대상 프로젝트"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        request.final_response = "대상 프로젝트를 알려주세요."
+        db_session.commit()
+
+        response = client.post(
+            f"/chatops/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "killblack"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    trace_logs = [record for record in caplog.records if record.name == "chatops.decision_trace"]
+    payloads = [json.loads(record.getMessage().split(" ", 1)[1]) for record in trace_logs]
+    rewrite_payload = next(payload for payload in payloads if payload["stage"] == "follow_up_interpreter")
+    assert rewrite_payload["decision"] == "rewritten"
+    assert rewrite_payload["data"]["original_message"] == "killblack"
+    assert rewrite_payload["data"]["rewritten_message"] == "project_name=killblack"
 
 
 def test_natural_language_approve_triggers_execution(db_session) -> None:

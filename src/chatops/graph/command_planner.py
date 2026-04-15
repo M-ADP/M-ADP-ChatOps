@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from chatops.domain.enums import RequestStatus
 from chatops.graph.state import GraphState
+from chatops.services.decision_trace import log_decision_trace
 
 
 GraphStateFactory = Callable[[Any, GraphState, list[str]], GraphState | None]
@@ -42,6 +43,15 @@ class CommandPlanningService:
 
         if selected is None:
             if not scored:
+                log_decision_trace(
+                    stage="command_planner",
+                    request_id=state.get("request_id"),
+                    session_id=state.get("session_id"),
+                    user_id=state.get("user_id"),
+                    decision="failed",
+                    reason="no matching command operation",
+                    data={"message_text": effective, "selected_operation_ids": operation_ids},
+                )
                 return {
                     "selected_operation_id": None,
                     "selected_operation_ids": [],
@@ -53,6 +63,19 @@ class CommandPlanningService:
 
             is_ambiguous, ambiguous_candidates = self.registry_service.detect_ambiguity(scored)
             if is_ambiguous:
+                log_decision_trace(
+                    stage="command_planner",
+                    request_id=state.get("request_id"),
+                    session_id=state.get("session_id"),
+                    user_id=state.get("user_id"),
+                    decision="ambiguous",
+                    reason="multiple command candidates remained after scoring",
+                    data={
+                        "message_text": effective,
+                        "selected_operation_ids": operation_ids,
+                        "ambiguity_candidates": [sc.entry.id for sc in ambiguous_candidates],
+                    },
+                )
                 return {
                     "selected_operation_id": None,
                     "selected_operation_ids": operation_ids,
@@ -79,6 +102,20 @@ class CommandPlanningService:
         )
         missing_inputs = self.missing_required_inputs(selected, resolved_inputs)
         if missing_inputs:
+            log_decision_trace(
+                stage="command_planner",
+                request_id=state.get("request_id"),
+                session_id=state.get("session_id"),
+                user_id=state.get("user_id"),
+                decision="input_required",
+                reason="required command inputs are missing",
+                data={
+                    "message_text": effective,
+                    "selected_operation_id": selected.id,
+                    "selected_operation_ids": operation_ids,
+                    "missing_inputs": missing_inputs,
+                },
+            )
             return {
                 "selected_operation_id": selected.id,
                 "selected_operation_ids": operation_ids,
@@ -97,6 +134,19 @@ class CommandPlanningService:
             user_role=state.get("user_role"),
         )
         if precheck_result.get("error"):
+            log_decision_trace(
+                stage="command_planner",
+                request_id=state.get("request_id"),
+                session_id=state.get("session_id"),
+                user_id=state.get("user_id"),
+                decision="failed",
+                reason="precheck failed",
+                data={
+                    "selected_operation_id": selected.id,
+                    "selected_operation_ids": operation_ids,
+                    "precheck_error": precheck_result["error"],
+                },
+            )
             return {
                 "selected_operation_id": selected.id,
                 "selected_operation_ids": operation_ids,
@@ -112,6 +162,20 @@ class CommandPlanningService:
             resolved_inputs = dict(resolved_inputs)
             resolved_inputs["resolved_ids"] = precheck_result["resolved_ids"]
 
+        log_decision_trace(
+            stage="command_planner",
+            request_id=state.get("request_id"),
+            session_id=state.get("session_id"),
+            user_id=state.get("user_id"),
+            decision="pending_approval",
+            reason="command plan prepared successfully",
+            data={
+                "message_text": effective,
+                "selected_operation_id": selected.id,
+                "selected_operation_ids": operation_ids,
+                "resolved_ids": precheck_result.get("resolved_ids"),
+            },
+        )
         return {
             "selected_operation_id": selected.id,
             "selected_operation_ids": operation_ids,

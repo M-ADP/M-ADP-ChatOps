@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from chatops.services.decision_trace import log_decision_trace
 from chatops.services.request_normalizer import RequestNormalizerService
 
 
@@ -72,31 +73,86 @@ class ConversationRouterService:
         explicit_task = self._has_explicit_task_signal(normalized)
 
         if explicit_social and not explicit_task:
-            return ConversationRouteDecision(
+            decision = ConversationRouteDecision(
                 route="small_talk",
                 social_score=0.98,
                 task_score=0.05,
                 response=self._small_talk_response(normalized),
             )
+            self._log_route(
+                message_text=message_text,
+                normalized=normalized,
+                explicit_social=explicit_social,
+                explicit_task=explicit_task,
+                decision=decision,
+            )
+            return decision
 
         social_score = self._social_score(normalized)
         task_score = self._task_score(normalized, session_context)
 
         if social_score >= 0.8 and task_score < 0.35:
-            return ConversationRouteDecision(
+            decision = ConversationRouteDecision(
                 route="small_talk",
                 social_score=social_score,
                 task_score=task_score,
                 response=self._small_talk_response(normalized),
             )
+            self._log_route(
+                message_text=message_text,
+                normalized=normalized,
+                explicit_social=explicit_social,
+                explicit_task=explicit_task,
+                decision=decision,
+            )
+            return decision
         if social_score >= 0.55 and task_score < 0.55:
-            return ConversationRouteDecision(
+            decision = ConversationRouteDecision(
                 route="bridge",
                 social_score=social_score,
                 task_score=task_score,
                 response="무엇을 도와드릴까요? 프로젝트 생성, 앱 생성, 목록 조회 중에 말씀해 주세요.",
             )
-        return ConversationRouteDecision(route="task", social_score=social_score, task_score=task_score)
+            self._log_route(
+                message_text=message_text,
+                normalized=normalized,
+                explicit_social=explicit_social,
+                explicit_task=explicit_task,
+                decision=decision,
+            )
+            return decision
+        decision = ConversationRouteDecision(route="task", social_score=social_score, task_score=task_score)
+        self._log_route(
+            message_text=message_text,
+            normalized=normalized,
+            explicit_social=explicit_social,
+            explicit_task=explicit_task,
+            decision=decision,
+        )
+        return decision
+
+    @staticmethod
+    def _log_route(
+        *,
+        message_text: str,
+        normalized: str,
+        explicit_social: bool,
+        explicit_task: bool,
+        decision: ConversationRouteDecision,
+    ) -> None:
+        log_decision_trace(
+            stage="conversation_router",
+            decision=decision.route,
+            reason="conversation route selected",
+            data={
+                "message_text": message_text,
+                "normalized_text": normalized,
+                "explicit_social": explicit_social,
+                "explicit_task": explicit_task,
+                "social_score": decision.social_score,
+                "task_score": decision.task_score,
+            },
+        )
 
     def _social_score(self, normalized: str) -> float:
         if not normalized:
