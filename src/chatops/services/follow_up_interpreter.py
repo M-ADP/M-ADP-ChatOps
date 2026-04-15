@@ -7,6 +7,7 @@ from typing import Any
 
 CHOICE_NUMBER_PATTERN = re.compile(r"^(?P<value>\d+)(?:번)?$")
 CHOICE_LETTER_PATTERN = re.compile(r"^(?P<value>[a-z])$", re.IGNORECASE)
+TRAILING_POLITE_SUFFIX_PATTERN = re.compile(r"(?:야|이야|입니다|이에요|예요)\s*$")
 
 
 @dataclass(frozen=True)
@@ -116,10 +117,16 @@ class FollowUpInterpreterService:
 
         normalized = message_text.strip()
         if len(fields) == 1:
-            key = str(fields[0].get("key") or "").strip()
+            field = fields[0]
+            key = str(field.get("key") or "").strip()
             if not key:
                 return None
-            return FollowUpRewrite(kind="missing_input_fill", message_text=f"{key}={normalized}")
+            value = self._extract_field_value(
+                message_text=normalized,
+                key=key,
+                label=str(field.get("label") or ""),
+            )
+            return FollowUpRewrite(kind="missing_input_fill", message_text=f"{key}={value}")
 
         parts = [part.strip() for part in normalized.split(",")]
         if len(parts) != len(fields) or any(not part for part in parts):
@@ -130,7 +137,12 @@ class FollowUpInterpreterService:
             key = str(field.get("key") or "").strip()
             if not key:
                 return None
-            assignments.append(f"{key}={value}")
+            extracted_value = self._extract_field_value(
+                message_text=value,
+                key=key,
+                label=str(field.get("label") or ""),
+            )
+            assignments.append(f"{key}={extracted_value}")
         return FollowUpRewrite(kind="missing_input_fill", message_text=" ".join(assignments))
 
     @staticmethod
@@ -140,3 +152,22 @@ class FollowUpInterpreterService:
     @staticmethod
     def _collapse_text(value: str) -> str:
         return "".join(value.lower().split())
+
+    @staticmethod
+    def _extract_field_value(*, message_text: str, key: str, label: str) -> str:
+        value = message_text.strip().strip("\"'")
+        if not value:
+            return ""
+
+        candidates = [token for token in (label, key) if isinstance(token, str) and token.strip()]
+        for token in candidates:
+            token_pattern = re.escape(token.strip())
+            prefix_pattern = re.compile(
+                rf"^\s*(?:{token_pattern})\s*(?:은|는|이|가)?\s*(?::|=)?\s*",
+                re.IGNORECASE,
+            )
+            value = prefix_pattern.sub("", value, count=1).strip()
+
+        value = TRAILING_POLITE_SUFFIX_PATTERN.sub("", value).strip()
+        value = value.strip("\"'")
+        return value or message_text.strip()

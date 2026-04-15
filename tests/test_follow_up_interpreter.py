@@ -97,6 +97,28 @@ def test_interpreter_maps_single_missing_field_from_bare_value() -> None:
     assert rewritten.message_text == "project_name=killblack"
 
 
+def test_interpreter_extracts_value_from_labeled_single_missing_field() -> None:
+    service = FollowUpInterpreterService()
+
+    rewritten = service.rewrite(
+        message_text="프로젝트 이름 : black",
+        previous_request_status="input_required",
+        session_context={
+            "last_missing_inputs": ["name"],
+            "last_task_snapshot": {
+                "follow_up_prompt": {
+                    "kind": "missing_input",
+                    "fields": [{"key": "name", "label": "프로젝트 이름"}],
+                }
+            },
+        },
+    )
+
+    assert rewritten is not None
+    assert rewritten.kind == "missing_input_fill"
+    assert rewritten.message_text == "name=black"
+
+
 def test_interpreter_maps_comma_separated_values_by_missing_input_order() -> None:
     service = FollowUpInterpreterService()
 
@@ -121,3 +143,27 @@ def test_interpreter_maps_comma_separated_values_by_missing_input_order() -> Non
 
     assert rewritten is not None
     assert rewritten.message_text == "cpu=1 memory=1.2 disk=1 port=8080"
+
+
+def test_interpreter_extracts_values_from_labeled_comma_separated_missing_inputs() -> None:
+    service = FollowUpInterpreterService()
+
+    rewritten = service.rewrite(
+        message_text="프로젝트 이름: black, 최대 CPU: 3",
+        previous_request_status="input_required",
+        session_context={
+            "last_missing_inputs": ["name", "max_cpu"],
+            "last_task_snapshot": {
+                "follow_up_prompt": {
+                    "kind": "missing_input",
+                    "fields": [
+                        {"key": "name", "label": "프로젝트 이름"},
+                        {"key": "max_cpu", "label": "최대 CPU"},
+                    ],
+                }
+            },
+        },
+    )
+
+    assert rewritten is not None
+    assert rewritten.message_text == "name=black max_cpu=3"
