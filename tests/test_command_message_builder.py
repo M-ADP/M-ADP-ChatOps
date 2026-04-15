@@ -55,3 +55,60 @@ def test_command_message_builder_formats_failure_message() -> None:
     )
 
     assert message == "프로젝트 멤버 제거에 실패했습니다. 대상 사용자를 찾지 못했습니다. 입력값을 확인하고 다시 시도해주세요."
+
+
+def test_command_message_builder_includes_project_create_details() -> None:
+    builder = CommandMessageBuilder()
+
+    message = builder.build_command_success_message(
+        "project.create",
+        "project.create",
+        {
+            "summary": "project.create",
+            "result": {
+                "data": {
+                    "id": 101,
+                    "name": "demo",
+                    "my_role": "OWNER",
+                    "max_cpu": 1,
+                    "max_memory": 0.5,
+                    "max_disk": 10,
+                }
+            },
+        },
+    )
+
+    assert "프로젝트를 생성했어요." in message
+    assert "프로젝트 이름은 demo입니다." in message
+    assert "프로젝트 ID는 101입니다." in message
+    assert "현재 권한은 OWNER입니다." in message
+    assert "리소스 한도는 CPU 1, 메모리 0.5GB, 디스크 10GB입니다." in message
+
+
+def test_command_message_builder_includes_application_create_access_details() -> None:
+    builder = CommandMessageBuilder()
+
+    message = builder.build_command_success_message(
+        "application.create_apps",
+        "application.create_apps",
+        {
+            "summary": "application.create_apps",
+            "result": {
+                "data": {
+                    "application_id": 777,
+                    "name": "api-server",
+                    "status": "RUNNING",
+                    "cpu": 1,
+                    "memory": 0.5,
+                    "disk": 10,
+                    "endpoint_url": "https://api.example.com",
+                }
+            },
+        },
+    )
+
+    assert "애플리케이션을 생성했어요." in message
+    assert "애플리케이션 이름은 api-server입니다." in message
+    assert "애플리케이션 ID는 777입니다." in message
+    assert "현재 상태는 RUNNING입니다." in message
+    assert "접속은 https://api.example.com로 하면 됩니다." in message

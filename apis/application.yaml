@@ -38,7 +38,6 @@ paths:
               memory: 1584
               disk: 9
               project_id: '98'
-              port: -28465550
       responses:
         '200':
           description: ''
@@ -417,23 +416,18 @@ components:
         project_id:
           type: string
           description: ''
-        port:
-          type: integer
-          description: ''
       x-apifox-orders:
         - name
         - cpu
         - memory
         - disk
         - project_id
-        - port
       required:
         - name
         - cpu
         - memory
         - disk
         - project_id
-        - port
     UpdateResourceInfoRequestDto:
       type: object
       properties:

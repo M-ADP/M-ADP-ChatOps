@@ -256,7 +256,6 @@ class ParameterResolverService:
                     "cpu": pairs.get("cpu"),
                     "memory": pairs.get("memory"),
                     "disk": pairs.get("disk"),
-                    "port": pairs.get("port"),
                 }
             )
             self._assign_if_present(references, "project_name", slots.project_name)
@@ -264,7 +263,6 @@ class ParameterResolverService:
             self._assign_if_present(pairs, "cpu", slots.cpu)
             self._assign_if_present(pairs, "memory", slots.memory)
             self._assign_if_present(pairs, "disk", slots.disk)
-            self._assign_if_present(pairs, "port", slots.port)
             return
 
         if operation_id in APPLICATION_REFERENCE_OPERATION_IDS:
@@ -552,7 +550,7 @@ class ParameterResolverService:
         self._infer_korean_numbers(message_text, pairs)
 
         for field_name, patterns in NUMERIC_FIELD_PATTERNS.items():
-            if field_name in pairs:
+            if field_name in pairs and isinstance(pairs[field_name], (int, float)):
                 continue
             for pattern in patterns:
                 last_match = self._find_last_match(pattern, message_text)

@@ -126,7 +126,9 @@ def test_command_retry_reenters_execute_and_completes_on_second_attempt() -> Non
     )
 
     assert result.status == "completed"
-    assert result.final_response == "프로젝트를 생성했습니다. 프로젝트 설정을 변경하거나 앱을 추가할 수 있습니다."
+    assert result.final_response is not None
+    assert "프로젝트를 생성했어요." in result.final_response
+    assert "실행 결과는 재시도 후 성공입니다." in result.final_response
     assert result.verifier_decision is not None
     assert result.verifier_decision["decision"] == "success"
     assert graph_service.nodes.downstream_dispatcher.command_calls == 2

@@ -131,8 +131,6 @@ class CommandMessageBuilder:
                 details.append(f"메모리 {body_values['memory']}MB")
             if body_values.get("disk") is not None:
                 details.append(f"디스크 {body_values['disk']}GB")
-            if body_values.get("port") is not None:
-                details.append(f"포트 {body_values['port']}")
             return self._compose_plan_message("애플리케이션을 생성할게요.", details)
 
         if operation.id == "application.delete_apps":
@@ -173,21 +171,30 @@ class CommandMessageBuilder:
         details.extend(f"{label} {value}" for label, value in self._user_visible_parameters(resolved_inputs))
         return self._compose_plan_message(f"{capability} 작업을 진행할게요.", details)
 
-    def build_command_success_message(self, operation_id: str, summary: str) -> str:
+    def build_command_success_message(
+        self,
+        operation_id: str,
+        summary: str,
+        result: dict[str, Any] | None = None,
+    ) -> str:
         messages = {
-            "project.create": "프로젝트를 생성했습니다. 프로젝트 설정을 변경하거나 앱을 추가할 수 있습니다.",
-            "project.update_name": "프로젝트 이름을 변경했습니다.",
-            "project.update_resource": "프로젝트 리소스를 변경했습니다.",
-            "project.delete": "프로젝트를 삭제했습니다.",
-            "project.add_member": "프로젝트 멤버를 추가했습니다.",
-            "project.remove_member": "프로젝트 멤버를 제거했습니다.",
-            "project.transfer_ownership": "프로젝트 소유권을 이전했습니다.",
-            "application.create_apps": "애플리케이션을 생성했습니다. GitHub 연결이나 리소스 설정을 진행할 수 있습니다.",
-            "application.delete_apps": "애플리케이션을 삭제했습니다.",
-            "application.patch_apps_resources": "애플리케이션 자원을 변경했습니다.",
-            "application.patch_apps_github": "애플리케이션 GitHub 연결 정보를 변경했습니다.",
+            "project.create": "프로젝트를 생성했어요.",
+            "project.update_name": "프로젝트 이름을 변경했어요.",
+            "project.update_resource": "프로젝트 리소스를 변경했어요.",
+            "project.delete": "프로젝트를 삭제했어요.",
+            "project.add_member": "프로젝트 멤버를 추가했어요.",
+            "project.remove_member": "프로젝트 멤버를 제거했어요.",
+            "project.transfer_ownership": "프로젝트 소유권을 이전했어요.",
+            "application.create_apps": "애플리케이션을 생성했어요.",
+            "application.delete_apps": "애플리케이션을 삭제했어요.",
+            "application.patch_apps_resources": "애플리케이션 자원을 변경했어요.",
+            "application.patch_apps_github": "애플리케이션 GitHub 연결 정보를 변경했어요.",
         }
-        return messages.get(operation_id, f"요청한 작업을 완료했습니다. {summary}")
+        headline = messages.get(operation_id, "요청하신 작업을 완료했어요.")
+        details = self._build_success_details(operation_id=operation_id, summary=summary, result=result)
+        if not details:
+            return f"{headline} {summary}".strip()
+        return " ".join([headline, *details]).strip()
 
     def build_command_failure_message(self, operation_id: str, summary: str) -> str:
         subjects = {
@@ -271,3 +278,68 @@ class CommandMessageBuilder:
         if isinstance(field_name, dict):
             return str(field_name.get("name", ""))
         return str(field_name)
+
+    @staticmethod
+    def _build_success_details(
+        *,
+        operation_id: str,
+        summary: str,
+        result: dict[str, Any] | None,
+    ) -> list[str]:
+        details: list[str] = []
+        payload = result.get("result") if isinstance(result, dict) else None
+        if not isinstance(payload, dict):
+            payload = {}
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            data = {}
+
+        if operation_id == "project.create":
+            name = data.get("name")
+            project_id = data.get("id") or data.get("project_id")
+            role = data.get("my_role")
+            if name:
+                details.append(f"프로젝트 이름은 {name}입니다.")
+            if project_id is not None:
+                details.append(f"프로젝트 ID는 {project_id}입니다.")
+            if role:
+                details.append(f"현재 권한은 {role}입니다.")
+            if any(data.get(key) is not None for key in ("max_cpu", "max_memory", "max_disk")):
+                details.append(
+                    "리소스 한도는 "
+                    f"CPU {data.get('max_cpu')}, 메모리 {data.get('max_memory')}GB, 디스크 {data.get('max_disk')}GB입니다."
+                )
+
+        if operation_id == "application.create_apps":
+            app_name = data.get("name") or data.get("app_name")
+            app_id = data.get("application_id") or data.get("app_id") or data.get("appId")
+            status = data.get("status")
+            cpu = data.get("cpu")
+            memory = data.get("memory")
+            disk = data.get("disk")
+            port = data.get("port")
+            if app_name:
+                details.append(f"애플리케이션 이름은 {app_name}입니다.")
+            if app_id is not None:
+                details.append(f"애플리케이션 ID는 {app_id}입니다.")
+            if status:
+                details.append(f"현재 상태는 {status}입니다.")
+            if any(value is not None for value in (cpu, memory, disk)):
+                details.append(f"할당 리소스는 CPU {cpu}, 메모리 {memory}, 디스크 {disk}입니다.")
+            access_url = (
+                data.get("access_url")
+                or data.get("endpoint_url")
+                or data.get("endpoint")
+                or data.get("url")
+                or data.get("domain")
+                or data.get("host")
+            )
+            if access_url:
+                details.append(f"접속은 {access_url}로 하면 됩니다.")
+            elif port is not None:
+                details.append(f"현재 확인된 접속 포트는 {port}입니다.")
+
+        if summary and summary.strip() and summary not in details:
+            details.append(f"실행 결과는 {summary}입니다.")
+
+        return details

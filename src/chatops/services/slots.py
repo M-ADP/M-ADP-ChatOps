@@ -76,7 +76,6 @@ class ApplicationCreateSlots(SlotModel):
     cpu: float | int | None = None
     memory: float | int | None = None
     disk: float | int | None = None
-    port: int | None = None
 
 
 class ApplicationGithubSlots(SlotModel):

@@ -516,7 +516,9 @@ def test_command_resume_executes_after_approval() -> None:
 
     assert result.status == "completed"
     assert result.requires_approval is False
-    assert result.final_response == "프로젝트를 생성했습니다. 프로젝트 설정을 변경하거나 앱을 추가할 수 있습니다."
+    assert result.final_response is not None
+    assert "프로젝트를 생성했어요." in result.final_response
+    assert "실행 결과는 project.create executed for user-1입니다." in result.final_response
     assert result.task_snapshot is not None
     assert result.task_snapshot["status"] == "completed"
     assert result.task_snapshot["approval_state"] == "completed"
@@ -1182,13 +1184,13 @@ def test_application_create_without_required_business_values_returns_input_requi
                         "query": [],
                         "body": {
                             "required": True,
-                            "required_fields": ["name", "cpu", "memory", "disk", "project_id", "port"],
+                            "required_fields": ["name", "cpu", "memory", "disk", "project_id"],
                         },
                     },
                     important_inputs={
                         "path": [],
                         "query": [],
-                        "body": ["name", "cpu", "memory", "disk", "project_id", "port"],
+                        "body": ["name", "cpu", "memory", "disk", "project_id"],
                     },
                 )
             ]
@@ -1207,7 +1209,7 @@ def test_application_create_without_required_business_values_returns_input_requi
     )
 
     assert result.status == "input_required"
-    assert result.missing_inputs == ["name", "cpu", "memory", "disk", "port"]
+    assert result.missing_inputs == ["name", "cpu", "memory", "disk"]
     assert result.final_response is not None
     assert "프로젝트 이름" not in result.final_response
 

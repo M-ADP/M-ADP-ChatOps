@@ -235,7 +235,7 @@ COMMAND_ENTRIES = {
             "headers": [],
             "path": [],
             "query": [],
-            "body": {"required": True, "required_fields": ["name", "cpu", "memory", "disk", "project_id", "port"]},
+            "body": {"required": True, "required_fields": ["name", "cpu", "memory", "disk", "project_id"]},
         },
     ),
     "application.patch_apps_github": _entry(

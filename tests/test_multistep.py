@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from chatops.domain.enums import RequestStatus
 from chatops.graph.service import GraphService
+from chatops.services.registry import RegistryEntry, ScoredCandidate
 from tests.test_graph_service import FakeRegistryService, FakeResolverService
 
 
@@ -233,3 +234,150 @@ def test_single_step_command_behaves_as_before() -> None:
     assert "개 작업을 모두 완료" not in result.final_response, (
         f"단일 단계에서 집계 응답이 나와선 안 됨: {result.final_response}"
     )
+
+
+def test_multistep_command_uses_plan_step_order_even_when_registry_top_candidate_differs() -> None:
+    """연계 명령에서는 registry 1순위가 달라도 plan step 순서를 우선해야 한다."""
+
+    @dataclass
+    class OrderedPlanLLMService(MultiStepLLMService):
+        def build_plan_object(
+            self,
+            message_text: str,
+            request_type: str,
+            candidate_operation_ids: list[str],
+        ) -> dict[str, object]:
+            del candidate_operation_ids
+            return {
+                "goal": message_text,
+                "specialist": "project",
+                "entities": {},
+                "constraints": {"approval_required": True},
+                "candidate_steps": [
+                    {
+                        "step_id": "step-0",
+                        "title": "프로젝트 생성",
+                        "status": "planned",
+                        "operation_id": "project.create",
+                    },
+                    {
+                        "step_id": "step-1",
+                        "title": "애플리케이션 생성",
+                        "status": "planned",
+                        "operation_id": "application.create_apps",
+                    },
+                ],
+                "risk_level": "medium",
+                "required_clarifications": [],
+            }
+
+    @dataclass
+    class DivergingRegistry(FakeRegistryService):
+        def _command_entries(self) -> list[RegistryEntry]:
+            return [
+                RegistryEntry(
+                    id="project.create",
+                    source_file="ai_registry/project.create.ai.yaml",
+                    operation_id="create_project",
+                    path="/projects",
+                    method="POST",
+                    summary="프로젝트 생성",
+                    capability="프로젝트 생성",
+                    usable_in=("command",),
+                    operation_kind="write",
+                    when_to_use=("프로젝트 생성",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="medium",
+                    side_effects=("프로젝트 생성",),
+                    required_headers=("X-User-Id",),
+                    required_inputs={"headers": [], "path": [], "query": [], "body": {"required": True, "required_fields": ["name"]}},
+                    important_inputs={"path": [], "query": [], "body": ["name"]},
+                    preconditions=(),
+                    missing_info_questions=(),
+                    response_interpretation="생성 결과",
+                    plan_template=(),
+                    examples=(),
+                ),
+                RegistryEntry(
+                    id="application.create_apps",
+                    source_file="ai_registry/application.create_apps.ai.yaml",
+                    operation_id="create_apps",
+                    path="/apps",
+                    method="POST",
+                    summary="애플리케이션 생성",
+                    capability="애플리케이션 생성",
+                    usable_in=("command",),
+                    operation_kind="write",
+                    when_to_use=("애플리케이션 생성",),
+                    when_not_to_use=(),
+                    requires_confirmation=True,
+                    risk_level="medium",
+                    side_effects=("애플리케이션 생성",),
+                    required_headers=("X-User-Id",),
+                    required_inputs={
+                        "headers": [],
+                        "path": [],
+                        "query": [],
+                        "body": {"required": True, "required_fields": ["name", "cpu", "memory", "disk", "project_id"]},
+                    },
+                    important_inputs={"path": [], "query": [], "body": ["name", "cpu", "memory", "disk", "project_id"]},
+                    preconditions=(),
+                    missing_info_questions=(),
+                    response_interpretation="생성 결과",
+                    plan_template=(),
+                    examples=(),
+                ),
+            ]
+
+        def find_scored_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[ScoredCandidate]:
+            del user_text, limit
+            entries = self.find_candidates("ignored", usable_in, limit=5)
+            if usable_in != "command":
+                return [ScoredCandidate(entry=e, score=100 - i) for i, e in enumerate(entries)]
+            # 실제 문장에서는 app 키워드가 더 강해서 app가 1순위라고 가정
+            app_entry = next(e for e in entries if e.id == "application.create_apps")
+            project_entry = next(e for e in entries if e.id == "project.create")
+            return [
+                ScoredCandidate(entry=app_entry, score=100.0),
+                ScoredCandidate(entry=project_entry, score=95.0),
+            ]
+
+    @dataclass
+    class FullResolver:
+        def resolve(
+            self,
+            operation: RegistryEntry,
+            message_text: str,
+            session_context: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            del message_text, session_context
+            if operation.id == "project.create":
+                return {"body": {"name": "demo-project"}}
+            return {"body": {"name": "demo-app", "cpu": 1, "memory": 0.5, "disk": 10}}
+
+    dispatcher = OrderedDispatcher()
+    service = GraphService(
+        llm_service=OrderedPlanLLMService(),
+        registry_service=DivergingRegistry(),
+        downstream_dispatcher=dispatcher,
+        resolver_service=FullResolver(),
+    )
+
+    first = service.handle_request(
+        session_id=4,
+        user_id="user-4",
+        message_text="프로젝트 생성해. 그리고 애플리케이션 생성해.",
+    )
+    assert first.status == RequestStatus.PENDING_APPROVAL.value
+
+    final = service.resume_request(
+        request_id=first.request_id,
+        session_id=4,
+        user_id="user-4",
+        message_text="승인",
+        approval_granted=True,
+    )
+
+    assert final.status == RequestStatus.COMPLETED.value
+    assert dispatcher.executed_operations == ["project.create", "application.create_apps"]

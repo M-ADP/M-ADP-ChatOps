@@ -28,34 +28,46 @@ class CommandPlanningService:
     def prepare(self, state: GraphState) -> GraphState:
         effective = state.get("effective_message_text", state["message_text"])
         scored = self.registry_service.find_scored_candidates(effective, usable_in="command")
-        if not scored:
-            return {
-                "selected_operation_id": None,
-                "selected_operation_ids": [],
-                "final_response": "요청하신 기능을 지원하지 않거나, 어떤 작업인지 명확하지 않습니다.",
-                "request_status": RequestStatus.FAILED.value,
-                "requires_approval": False,
-                "error_code": "NO_MATCHING_OPERATION",
-            }
-
         operation_ids = [sc.entry.id for sc in scored]
-        is_ambiguous, ambiguous_candidates = self.registry_service.detect_ambiguity(scored)
-        if is_ambiguous:
-            return {
-                "selected_operation_id": None,
-                "selected_operation_ids": operation_ids,
-                "is_ambiguous": True,
-                "ambiguity_candidates": [
-                    {"id": sc.entry.id, "capability": sc.entry.capability, "score": sc.score}
-                    for sc in ambiguous_candidates
-                ],
-                "final_response": self.ambiguity_response_builder(ambiguous_candidates),
-                "request_status": RequestStatus.AMBIGUOUS.value,
-                "requires_approval": False,
-                "error_code": "AMBIGUOUS_OPERATION",
-            }
+        preferred_operation_id = str(state.get("selected_operation_id") or "").strip()
+        selected = None
 
-        selected = scored[0].entry
+        if preferred_operation_id:
+            selected = self.registry_service.get_entry(preferred_operation_id)
+            if selected is None or "command" not in selected.usable_in:
+                selected = None
+            else:
+                if preferred_operation_id not in operation_ids:
+                    operation_ids = [preferred_operation_id, *operation_ids]
+
+        if selected is None:
+            if not scored:
+                return {
+                    "selected_operation_id": None,
+                    "selected_operation_ids": [],
+                    "final_response": "요청하신 기능을 지원하지 않거나, 어떤 작업인지 명확하지 않습니다.",
+                    "request_status": RequestStatus.FAILED.value,
+                    "requires_approval": False,
+                    "error_code": "NO_MATCHING_OPERATION",
+                }
+
+            is_ambiguous, ambiguous_candidates = self.registry_service.detect_ambiguity(scored)
+            if is_ambiguous:
+                return {
+                    "selected_operation_id": None,
+                    "selected_operation_ids": operation_ids,
+                    "is_ambiguous": True,
+                    "ambiguity_candidates": [
+                        {"id": sc.entry.id, "capability": sc.entry.capability, "score": sc.score}
+                        for sc in ambiguous_candidates
+                    ],
+                    "final_response": self.ambiguity_response_builder(ambiguous_candidates),
+                    "request_status": RequestStatus.AMBIGUOUS.value,
+                    "requires_approval": False,
+                    "error_code": "AMBIGUOUS_OPERATION",
+                }
+
+            selected = scored[0].entry
         auth_error = self.auth_precheck_failure(selected, state, operation_ids)
         if auth_error is not None:
             return auth_error

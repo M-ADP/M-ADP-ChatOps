@@ -140,9 +140,13 @@ class WorkflowNodes:
                 "completed_steps": [],
             }
         candidate_steps = plan_object.get("candidate_steps") or []
+        first_step_operation_id = ""
+        if candidate_steps and isinstance(candidate_steps[0], dict):
+            first_step_operation_id = str(candidate_steps[0].get("operation_id") or "")
         return {
             "plan_object": plan_object,
             "selected_specialist": str(plan_object.get("specialist") or ""),
+            "selected_operation_id": first_step_operation_id or None,
             "current_step_index": 0,
             "total_steps": len(candidate_steps),
             "completed_steps": [],
@@ -632,14 +636,24 @@ class WorkflowNodes:
             lines = []
             for i, step in enumerate(completed_steps, start=1):
                 step_op = step.get("operation_id", "")
-                step_summary = (step.get("result") or {}).get("summary", "")
-                lines.append(f"{i}. [{step_op}] {step_summary}")
+                step_result = step.get("result") or {}
+                step_summary = str(step_result.get("summary", ""))
+                step_message = self.command_message_builder.build_command_success_message(
+                    str(step_op),
+                    step_summary,
+                    step_result if isinstance(step_result, dict) else None,
+                )
+                lines.append(f"{i}) {step_message.replace(chr(10), ' ')}")
             summary = "\n".join(lines)
-            final_response = f"✅ {len(completed_steps)}개 작업을 모두 완료했습니다:\n{summary}"
+            final_response = f"요청하신 {len(completed_steps)}개 작업을 순서대로 완료했어요.\n{summary}"
         else:
             result = state.get("command_result") or {}
             summary = str(result.get("summary", "명령 실행 결과가 없습니다."))
-            final_response = self.command_message_builder.build_command_success_message(operation_id, summary)
+            final_response = self.command_message_builder.build_command_success_message(
+                operation_id,
+                summary,
+                result if isinstance(result, dict) else None,
+            )
 
         return {
             "final_response": final_response,
