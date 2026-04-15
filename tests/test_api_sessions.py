@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 import logging
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from chatops.api.dependencies import get_db_session, get_graph_service
 from chatops.app import create_app
-from chatops.db.repositories import RequestRepository, SessionRepository
+from chatops.db.repositories import MessageRepository, RequestRepository, SessionRepository
 from chatops.graph.service import GraphResult
 from chatops.schemas.sessions import CreateSessionRequest, SessionResponse
 from chatops.services.auth import build_auth_context
@@ -50,6 +51,20 @@ class StubGraphService:
             effective_message_text=self.effective_message_text,
             task_snapshot=self.task_snapshot,
         )
+
+
+class AsyncCommandStubGraphService(StubGraphService):
+    def preview_request(
+        self,
+        message_text: str,
+        session_context: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del session_context
+        return {
+            "request_type": "command",
+            "effective_message_text": message_text,
+            "intent": "execute_command",
+        }
 
 
 @pytest.fixture()
@@ -355,6 +370,62 @@ def test_post_session_message_returns_user_and_assistant_messages(db_session) ->
     assert body["messages"][0]["text"] == "demo 프로젝트에 api 앱 만들어줘"
     assert body["messages"][1]["type"] == "task"
     assert body["messages"][1]["task"]["title"] == "애플리케이션 생성"
+
+
+def test_post_session_message_returns_request_metadata(db_session) -> None:
+    app = create_app()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return AsyncCommandStubGraphService()
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/chatops/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={"title": "메시지 전송"},
+        ).json()
+
+        response = client.post(
+            f"/chatops/sessions/{session['session_id']}/messages",
+            headers={"X-User-Id": "user-1", "X-User-Role": "admin"},
+            json={"message": "demo 프로젝트에 api 앱 만들어줘"},
+        )
+        request_id = response.json()["request_id"]
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            db_session.expire_all()
+            persisted = RequestRepository(db_session).get_for_user(request_id, "user-1")
+            messages = MessageRepository(db_session).list_recent_for_session(
+                session_id=session["session_id"],
+                user_id="user-1",
+                limit=2,
+            )
+            if (
+                persisted is not None
+                and persisted.status != "processing"
+                and len(messages) == 2
+                and messages[-1].role == "assistant"
+            ):
+                break
+            time.sleep(0.02)
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    body = response.json()
+    assert isinstance(body["request_id"], int)
+    assert body["request_status"] == "processing"
+    assert body["request_type"] == "command"
+    assert body["task"] is None
+    assert body["final_response"] is None
+    assert [message["role"] for message in body["messages"]] == ["user"]
+    assert body["messages"][0]["text"] == "demo 프로젝트에 api 앱 만들어줘"
 
 
 def test_get_session_projects_runtime_metadata_into_assistant_message(client: TestClient, db_session) -> None:

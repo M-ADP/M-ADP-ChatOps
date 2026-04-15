@@ -177,7 +177,7 @@ def post_session_message(
     db_session: Session = Depends(get_db_session),
     graph_service: GraphService = Depends(get_graph_service),
 ) -> CreateSessionMessageResponse:
-    create_request_resource(
+    request_response = create_request_resource(
         session_id=session_id,
         payload=CreateRequestRequest(message=payload.message),
         auth=auth,
@@ -191,5 +191,10 @@ def post_session_message(
         limit=2,
     )
     return CreateSessionMessageResponse(
+        request_id=request_response.request_id,
+        request_status=request_response.status,
+        request_type=request_response.request_type,
+        final_response=request_response.final_response,
+        task=request_response.task,
         messages=[service.build_message(record) for record in messages],
     )

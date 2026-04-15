@@ -55,11 +55,21 @@ class CreateSessionMessageRequest(BaseModel):
 
 
 class CreateSessionMessageResponse(BaseModel):
+    request_id: int | None = None
+    request_status: str | None = None
+    request_type: str | None = None
+    final_response: str | None = None
+    task: TaskSnapshot | None = None
     messages: list[ConversationMessage]
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
+                "request_id": 2001,
+                "request_status": "processing",
+                "request_type": "command",
+                "final_response": None,
+                "task": None,
                 "messages": [
                     {
                         "message_id": "msg_user_01",

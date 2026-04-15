@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import inspect
 import logging
+import re
 import threading
 from datetime import datetime, timezone
 
@@ -116,6 +117,39 @@ def _supports_parameter(func, parameter_name: str) -> bool:
     except (TypeError, ValueError):
         return False
     return parameter_name in signature.parameters
+
+
+def _build_session_factory(db_session: Session) -> sessionmaker[Session]:
+    bind = db_session.get_bind()
+    bind = getattr(bind, "engine", bind)
+    return sessionmaker(
+        bind=bind,
+        autoflush=False,
+        autocommit=False,
+        future=True,
+    )
+
+
+def _response_delta_chunks(text: str | None) -> list[str]:
+    if text is None:
+        return []
+    normalized = text.strip()
+    if not normalized:
+        return []
+
+    chunks: list[str] = []
+    for piece in re.split(r"(?<=[.!?])\s+|(?<=요\.)\s+|(?<=다\.)\s+|(?<=까\?)\s+|(?<=요\?)\s+", normalized):
+        trimmed = piece.strip()
+        if not trimmed:
+            continue
+        if len(trimmed) <= 80:
+            chunks.append(trimmed)
+            continue
+        for start in range(0, len(trimmed), 80):
+            segment = trimmed[start:start + 80].strip()
+            if segment:
+                chunks.append(segment)
+    return chunks
 
 
 def _preview_request(
@@ -447,6 +481,7 @@ def _append_request_resolution_events(
     record: RequestRecord,
     graph_result,
     audit_context: dict[str, object],
+    response_streamed: bool = False,
 ) -> None:
     _append_structured_event(
         event_service,
@@ -468,6 +503,15 @@ def _append_request_resolution_events(
         },
         audit_context=audit_context,
     )
+
+    if not response_streamed:
+        _append_supplemental_response_events(
+            event_service,
+            record=record,
+            text=record.final_response,
+            source="final_response",
+            synthetic=True,
+        )
 
     if record.status == RequestStatus.PENDING_APPROVAL.value:
         _append_structured_event(
@@ -621,6 +665,8 @@ def _append_response_delta_event(
     *,
     record: RequestRecord,
     text: str,
+    source: str = "model_stream",
+    synthetic: bool = False,
 ) -> None:
     event_service.append_event(
         request_id=record.id,
@@ -631,8 +677,32 @@ def _append_response_delta_event(
             "request_id": record.id,
             "session_id": record.session_id,
             "text": text,
+            "source": source,
+            "synthetic": synthetic,
         },
     )
+
+
+def _append_supplemental_response_events(
+    event_service: EventService,
+    *,
+    record: RequestRecord,
+    text: str | None,
+    source: str,
+    synthetic: bool,
+) -> None:
+    chunks = _response_delta_chunks(text)
+    if not chunks:
+        return
+    _append_response_stream_start_event(event_service, record=record)
+    for chunk in chunks:
+        _append_response_delta_event(
+            event_service,
+            record=record,
+            text=chunk,
+            source=source,
+            synthetic=synthetic,
+        )
 
 
 def _process_async_request(
@@ -663,7 +733,13 @@ def _process_async_request(
             if not stream_started:
                 _append_response_stream_start_event(event_service, record=record)
                 stream_started = True
-            _append_response_delta_event(event_service, record=record, text=text)
+            _append_response_delta_event(
+                event_service,
+                record=record,
+                text=text,
+                source="model_stream",
+                synthetic=False,
+            )
 
         graph_result = _invoke_graph_handle_request(
             graph_service,
@@ -711,6 +787,7 @@ def _process_async_request(
             record=record,
             graph_result=graph_result,
             audit_context=_build_graph_audit_context(graph_result, user_id),
+            response_streamed=stream_started,
         )
         _sync_assistant_message(worker_session, record)
     except Exception:
@@ -957,15 +1034,16 @@ def create_request(
         message_text=graph_message_text,
         session_context=session_context,
     )
-    if preview is not None and preview.get("request_type") in {"inquiry", "query"}:
+    if preview is not None and preview.get("request_type") in {"inquiry", "query", "command"}:
         request_id = IdGenerator.generate_sonyflake_id()
+        request_type = str(preview.get("request_type") or "")
         record = repo.create(
             request_id=request_id,
             session_id=session_id,
             user_id=auth.user_id,
             message_text=payload.message,
             effective_message_text=str(preview.get("effective_message_text") or payload.message),
-            request_type=str(preview.get("request_type") or ""),
+            request_type=request_type,
             requires_approval=False,
         )
         record.status = RequestStatus.PROCESSING.value
@@ -1002,12 +1080,7 @@ def create_request(
                 },
             )
 
-        session_factory = sessionmaker(
-            bind=db_session.get_bind(),
-            autoflush=False,
-            autocommit=False,
-            future=True,
-        )
+        session_factory = _build_session_factory(db_session)
         threading.Thread(
             target=_process_async_request,
             kwargs={
@@ -1152,6 +1225,7 @@ def _handle_natural_language_approval(
             detail=f"Request is in '{previous_request.status}' state",
         )
 
+    _append_execution_started_event(EventService(db_session), record=previous_request)
     graph_result = graph_service.resume_request(
         request_id=previous_request.id,
         session_id=session_id,
@@ -1334,6 +1408,7 @@ def approve_request(
             detail="Request is not pending approval",
         )
 
+    _append_execution_started_event(EventService(db_session), record=record)
     graph_result = graph_service.resume_request(
         request_id=request_id,
         session_id=session_id,

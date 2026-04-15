@@ -84,6 +84,46 @@ class StreamingStubGraphService:
         )
 
 
+class AsyncCommandPreviewGraphService:
+    def preview_request(
+        self,
+        message_text: str,
+        session_context: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del session_context
+        return {
+            "request_type": "command",
+            "effective_message_text": message_text,
+            "intent": "execute_command",
+        }
+
+    def handle_request(
+        self,
+        session_id: int,
+        user_id: str,
+        message_text: str,
+        user_role: str | None = None,
+        org_id: str | None = None,
+        session_context: dict[str, object] | None = None,
+        request_id: int | None = None,
+        response_stream_handler=None,
+    ) -> GraphResult:
+        del user_role, org_id, session_context, response_stream_handler
+        time.sleep(0.2)
+        return GraphResult(
+            request_id=request_id or 7101,
+            session_id=session_id,
+            user_id=user_id,
+            status="pending_approval",
+            request_type="command",
+            requires_approval=True,
+            intent="execute_command",
+            final_response=f"{message_text} 요청을 확인했어요. 승인하면 바로 진행할게요.",
+            selected_operation_ids=["application.create_apps"],
+            missing_inputs=None,
+        )
+
+
 @pytest.fixture()
 def client(db_session):
     app = create_app()
@@ -284,3 +324,57 @@ def test_create_request_returns_immediately_and_streams_ai_deltas(db_session) ->
     assert '"text": "문의 "' in body
     assert '"text": "응답"' in body
     assert "event: response.completed" in body
+
+
+def test_async_command_streams_supplemental_deltas_before_approval(db_session) -> None:
+    app = create_app()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return AsyncCommandPreviewGraphService()
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/chatops/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        create_response = client.post(
+            f"/chatops/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "demo 프로젝트에 api 앱 만들어줘"},
+        )
+        request_id = create_response.json()["request_id"]
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            db_session.expire_all()
+            event_types = [
+                event.event_type
+                for event in EventService(db_session).list_after_sequence(request_id=request_id, sequence=0)
+            ]
+            if "approval.required" in event_types:
+                break
+            time.sleep(0.02)
+
+        response = client.get(
+            f"/chatops/sessions/{session['session_id']}/requests/{request_id}/stream",
+            headers={"X-User-Id": "user-1"},
+        )
+        body = response.text
+
+    app.dependency_overrides.clear()
+
+    assert create_response.status_code == 202
+    assert create_response.json()["status"] == "processing"
+    assert response.status_code == 200
+    assert "event: response.started" in body
+    assert "event: response.delta" in body
+    assert '"synthetic": true' in body
+    assert '"source": "final_response"' in body
+    assert body.index("event: response.delta") < body.index("event: approval.required")
