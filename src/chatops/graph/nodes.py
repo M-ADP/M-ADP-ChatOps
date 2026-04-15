@@ -25,6 +25,7 @@ from chatops.graph.state import GraphState
 from chatops.graph.verifier_service import VerifierService
 from chatops.graph.verifier_transition_service import VerifierTransitionService
 from chatops.services.auth import format_missing_auth_headers, missing_auth_headers
+from chatops.services.decision_trace import log_decision_trace
 from chatops.services.downstream_dispatcher import EntityResolutionError
 from chatops.services.task_snapshot_builder import TaskSnapshotBuilder
 
@@ -143,6 +144,24 @@ class WorkflowNodes:
         first_step_operation_id = ""
         if candidate_steps and isinstance(candidate_steps[0], dict):
             first_step_operation_id = str(candidate_steps[0].get("operation_id") or "")
+        log_decision_trace(
+            stage="plan_runtime",
+            request_id=state.get("request_id"),
+            session_id=state.get("session_id"),
+            user_id=state.get("user_id"),
+            decision=str(state.get("request_type") or ""),
+            reason="planner built plan object",
+            data={
+                "message_text": state.get("effective_message_text", state["message_text"]),
+                "goal": plan_object.get("goal"),
+                "specialist": plan_object.get("specialist"),
+                "constraints": plan_object.get("constraints"),
+                "candidate_steps": candidate_steps,
+                "risk_level": plan_object.get("risk_level"),
+                "required_clarifications": plan_object.get("required_clarifications"),
+                "selected_operation_id": first_step_operation_id or None,
+            },
+        )
         return {
             "plan_object": plan_object,
             "selected_specialist": str(plan_object.get("specialist") or ""),

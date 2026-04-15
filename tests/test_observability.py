@@ -35,6 +35,47 @@ class _FakeLLMService:
         return str(raw_result["summary"])
 
 
+@dataclass
+class _PlanningLLMService(_FakeLLMService):
+    def classify(self, message_text: str) -> dict[str, object]:
+        del message_text
+        return {
+            "request_type": "command",
+            "intent": "provision_application",
+            "classification_reason": "생성 명령",
+            "classification_confidence": 0.98,
+        }
+
+    def build_plan_object(
+        self,
+        message_text: str,
+        request_type: str,
+        candidate_operation_ids: list[str],
+    ) -> dict[str, object]:
+        return {
+            "goal": message_text,
+            "specialist": "application",
+            "entities": {"project_name": "demo"},
+            "constraints": {"approval_required": True, "request_type": request_type},
+            "candidate_steps": [
+                {
+                    "step_id": "create-app",
+                    "title": "애플리케이션 생성",
+                    "status": "planned",
+                    "operation_id": candidate_operation_ids[0],
+                },
+                {
+                    "step_id": "check-status",
+                    "title": "생성 상태 확인",
+                    "status": "planned",
+                    "operation_id": "application.get_apps_status",
+                },
+            ],
+            "risk_level": "medium",
+            "required_clarifications": ["port"],
+        }
+
+
 def _query_entry(entry_id: str) -> RegistryEntry:
     return RegistryEntry(
         id=entry_id,
@@ -62,6 +103,33 @@ def _query_entry(entry_id: str) -> RegistryEntry:
     )
 
 
+def _command_entry(entry_id: str) -> RegistryEntry:
+    return RegistryEntry(
+        id=entry_id,
+        source_file="test",
+        operation_id=entry_id,
+        path="/apps",
+        method="POST",
+        summary=entry_id,
+        capability=entry_id,
+        usable_in=("command",),
+        operation_kind="write",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="medium",
+        side_effects=(),
+        required_headers=("X-User-Id",),
+        required_inputs={"headers": [], "path": [], "query": [], "body": {"required": True, "required_fields": []}},
+        important_inputs={"body": []},
+        preconditions=(),
+        missing_info_questions=(),
+        response_interpretation="",
+        plan_template=(),
+        examples=(),
+    )
+
+
 @dataclass
 class _FallbackRegistryService:
     def find_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[RegistryEntry]:
@@ -78,6 +146,24 @@ class _FallbackRegistryService:
 
     def get_entry(self, entry_id: str) -> RegistryEntry | None:
         return _query_entry(entry_id)
+
+
+@dataclass
+class _CommandRegistryService:
+    def find_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[RegistryEntry]:
+        del user_text, limit
+        assert usable_in == "command"
+        return [_command_entry("application.create_apps")]
+
+    def find_scored_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[ScoredCandidate]:
+        return [ScoredCandidate(entry=self.find_candidates(user_text, usable_in, limit)[0], score=100)]
+
+    def detect_ambiguity(self, scored_candidates: list[ScoredCandidate]) -> tuple[bool, list[ScoredCandidate]]:
+        del scored_candidates
+        return False, []
+
+    def get_entry(self, entry_id: str) -> RegistryEntry | None:
+        return _command_entry(entry_id)
 
 
 @dataclass
@@ -246,3 +332,46 @@ def test_preview_request_logs_classification_trace(caplog) -> None:
     preview_payload = next(payload for payload in payloads if payload["stage"] == "preview_request")
     assert preview_payload["decision"] == "query"
     assert preview_payload["data"]["intent"] == "query_status"
+
+
+def test_handle_request_logs_plan_runtime_trace(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="chatops.decision_trace")
+    graph_service = GraphService(
+        llm_service=_PlanningLLMService(),
+        registry_service=_CommandRegistryService(),
+        adapter_service=_FallbackDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1003,
+        user_id="user-3",
+        message_text="demo 프로젝트에 애플리케이션 생성해",
+    )
+
+    assert result.plan_object is not None
+    trace_logs = [record for record in caplog.records if record.name == "chatops.decision_trace"]
+    payloads = [_parse_log_json(record) for record in trace_logs]
+    plan_payload = next(payload for payload in payloads if payload["stage"] == "plan_runtime")
+    assert plan_payload["decision"] == "command"
+    assert plan_payload["request_id"] == result.request_id
+    assert plan_payload["session_id"] == 1003
+    assert plan_payload["user_id"] == "user-3"
+    assert plan_payload["data"]["goal"] == "demo 프로젝트에 앱 생성해"
+    assert plan_payload["data"]["specialist"] == "application"
+    assert plan_payload["data"]["risk_level"] == "medium"
+    assert plan_payload["data"]["required_clarifications"] == ["port"]
+    assert plan_payload["data"]["candidate_steps"] == [
+        {
+            "step_id": "create-app",
+            "title": "애플리케이션 생성",
+            "status": "planned",
+            "operation_id": "application.create_apps",
+        },
+        {
+            "step_id": "check-status",
+            "title": "생성 상태 확인",
+            "status": "planned",
+            "operation_id": "application.get_apps_status",
+        },
+    ]
