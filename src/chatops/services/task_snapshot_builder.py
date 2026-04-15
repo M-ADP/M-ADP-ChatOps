@@ -23,6 +23,7 @@ class TaskSnapshotBuilder:
         clarification_type: str | None = None,
         is_ambiguous: bool = False,
         summary: str | None = None,
+        follow_up_prompt: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         if operation is None:
             return None
@@ -42,6 +43,7 @@ class TaskSnapshotBuilder:
             "summary": summary,
             "clarification_type": clarification_type,
             "is_ambiguous": is_ambiguous,
+            "follow_up_prompt": follow_up_prompt,
         }
 
     def _filled_inputs(self, resolved_inputs: dict[str, Any] | None) -> dict[str, Any] | None:

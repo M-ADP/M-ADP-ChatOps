@@ -145,6 +145,30 @@ def test_command_mode_prefers_application_create_for_natural_language_create_req
     assert candidates[0].id == "application.create_apps"
 
 
+def test_command_mode_prefers_application_create_for_incomplete_application_requests() -> None:
+    service = RegistryService.from_directory("ai_registry")
+
+    candidates = service.find_candidates(
+        "애플리케이션 생성해",
+        usable_in="command",
+    )
+
+    assert candidates
+    assert candidates[0].id == "application.create_apps"
+
+
+def test_command_mode_prefers_application_create_for_eopeulrikeshyeon_synonym() -> None:
+    service = RegistryService.from_directory("ai_registry")
+
+    candidates = service.find_candidates(
+        "어플리케이션 생성해, 앱 이름 : heyblackk, CPU 1, 메모리 1.2, 디스크 1, 대상 프로젝트 : killblack",
+        usable_in="command",
+    )
+
+    assert candidates
+    assert candidates[0].id == "application.create_apps"
+
+
 def test_command_mode_prefers_application_delete_for_delete_language() -> None:
     service = RegistryService.from_directory("ai_registry")
 

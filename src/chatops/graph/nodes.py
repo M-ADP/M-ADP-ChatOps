@@ -188,9 +188,26 @@ class WorkflowNodes:
             clarification_type=prepared.get("clarification_type"),
             is_ambiguous=bool(prepared.get("is_ambiguous", False)),
             summary=prepared.get("final_response"),
+            follow_up_prompt=self._build_follow_up_prompt(
+                request_status=str(prepared.get("request_status", state.get("request_status", ""))),
+                operation=operation,
+                ambiguity_candidates=prepared.get("ambiguity_candidates"),
+                missing_inputs=prepared.get("missing_inputs"),
+            ),
         )
         if task_snapshot is not None:
             prepared["task_snapshot"] = task_snapshot
+        elif str(prepared.get("request_status")) == RequestStatus.AMBIGUOUS.value:
+            prepared["task_snapshot"] = self._build_ambiguity_task_snapshot(
+                request_type="query",
+                summary=prepared.get("final_response"),
+                follow_up_prompt=self._build_follow_up_prompt(
+                    request_status=RequestStatus.AMBIGUOUS.value,
+                    operation=None,
+                    ambiguity_candidates=prepared.get("ambiguity_candidates"),
+                    missing_inputs=None,
+                ),
+            )
         selected_operation_id = prepared.get("selected_operation_id")
         specialist = self.specialist_router.for_operation(selected_operation_id)
         specialist_result = specialist.describe(
@@ -346,9 +363,26 @@ class WorkflowNodes:
             clarification_type=planned.get("clarification_type"),
             is_ambiguous=bool(planned.get("is_ambiguous", False)),
             summary=planned.get("final_response"),
+            follow_up_prompt=self._build_follow_up_prompt(
+                request_status=str(planned.get("request_status", state.get("request_status", ""))),
+                operation=operation,
+                ambiguity_candidates=planned.get("ambiguity_candidates"),
+                missing_inputs=planned.get("missing_inputs"),
+            ),
         )
         if task_snapshot is not None:
             planned["task_snapshot"] = task_snapshot
+        elif str(planned.get("request_status")) == RequestStatus.AMBIGUOUS.value:
+            planned["task_snapshot"] = self._build_ambiguity_task_snapshot(
+                request_type="command",
+                summary=planned.get("final_response"),
+                follow_up_prompt=self._build_follow_up_prompt(
+                    request_status=RequestStatus.AMBIGUOUS.value,
+                    operation=None,
+                    ambiguity_candidates=planned.get("ambiguity_candidates"),
+                    missing_inputs=None,
+                ),
+            )
         specialist = self.specialist_router.for_operation(selected_operation_id)
         specialist_result = specialist.describe(
             operation_id=selected_operation_id,
@@ -705,6 +739,12 @@ class WorkflowNodes:
             clarification_type=clarification_type,
             is_ambiguous=bool(state.get("is_ambiguous", False)),
             summary=final_response,
+            follow_up_prompt=self._build_follow_up_prompt(
+                request_status=request_status,
+                operation=operation,
+                ambiguity_candidates=state.get("ambiguity_candidates"),
+                missing_inputs=missing_inputs,
+            ),
         )
         return {
             "final_response": final_response,
@@ -841,6 +881,63 @@ class WorkflowNodes:
             operation_id=operation_id,
             resolved_inputs=resolved_inputs,
         )
+
+    def _build_follow_up_prompt(
+        self,
+        *,
+        request_status: str,
+        operation,
+        ambiguity_candidates,
+        missing_inputs: list[str] | None,
+    ) -> dict[str, Any] | None:
+        if request_status == RequestStatus.AMBIGUOUS.value and isinstance(ambiguity_candidates, list):
+            options: list[dict[str, str]] = []
+            for candidate in ambiguity_candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                capability = str(candidate.get("capability") or candidate.get("id") or "").strip()
+                if not capability:
+                    continue
+                options.append({"label": capability, "value": capability})
+            if options:
+                return {"kind": "choice", "options": options}
+
+        if request_status == RequestStatus.INPUT_REQUIRED.value and operation is not None and missing_inputs:
+            fields = [
+                {
+                    "key": field_name,
+                    "label": self.command_message_builder.format_missing_input_prompt_label(operation.id, field_name),
+                }
+                for field_name in missing_inputs
+            ]
+            if fields:
+                return {"kind": "missing_input", "fields": fields}
+        return None
+
+    @staticmethod
+    def _build_ambiguity_task_snapshot(
+        *,
+        request_type: str,
+        summary: str | None,
+        follow_up_prompt: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        return {
+            "kind": "operation",
+            "title": "작업 확인",
+            "operation_id": None,
+            "status": RequestStatus.AMBIGUOUS.value,
+            "request_type": request_type,
+            "approval_state": "needs_clarification",
+            "risk_level": "low",
+            "target": None,
+            "filled_inputs": None,
+            "missing_inputs": None,
+            "next_actions": ["choose_option", "cancel"],
+            "summary": summary,
+            "clarification_type": "ambiguity",
+            "is_ambiguous": True,
+            "follow_up_prompt": follow_up_prompt,
+        }
 
     @staticmethod
     def _format_high_risk_confirmation_payload(payload: dict[str, str]) -> str:

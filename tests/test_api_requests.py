@@ -44,6 +44,7 @@ class StubGraphService:
     session_summary: dict[str, object] | None = None
     resolved_references: dict[str, object] | None = None
     resolved_ids: dict[str, object] | None = None
+    last_message_text: str | None = None
 
     def handle_request(
         self,
@@ -55,6 +56,7 @@ class StubGraphService:
         session_context: dict[str, object] | None = None,
     ) -> GraphResult:
         self.last_session_context = session_context
+        self.last_message_text = message_text
         request_id = self.next_request_id
         self.next_request_id += 1
         return GraphResult(
@@ -619,6 +621,7 @@ def test_create_request_passes_previous_session_message_as_context(db_session) -
         "last_final_response": None,
         "last_effective_message_text": None,
         "last_resolved_references": None,
+        "last_task_snapshot": None,
     }
 
 
@@ -673,6 +676,7 @@ def test_create_request_passes_input_required_context_for_follow_up(db_session) 
         "last_final_response": "프로젝트 이름이 필요합니다.",
         "last_effective_message_text": None,
         "last_resolved_references": None,
+        "last_task_snapshot": None,
     }
 
 
@@ -725,6 +729,7 @@ def test_create_request_passes_last_effective_message_text_for_multi_turn_follow
         "last_final_response": None,
         "last_effective_message_text": "프로젝트 하나 만들어줘\n이름은 demo야 cpu는 1이야",
         "last_resolved_references": None,
+        "last_task_snapshot": None,
         "session_summary": {
             "active_goal": "이름은 demo야 cpu는 1이야",
             "recent_entities": {"projects": [], "applications": [], "users": []},
@@ -733,6 +738,135 @@ def test_create_request_passes_last_effective_message_text_for_multi_turn_follow
             "updated_at": stub_graph_service.last_session_context["session_summary"]["updated_at"],
         },
     }
+
+
+def test_create_request_rewrites_ambiguity_numeric_follow_up_before_graph(db_session) -> None:
+    app = create_app()
+    stub_graph_service = StubGraphService()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return stub_graph_service
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/chatops/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        repo = RequestRepository(db_session)
+        request = repo.create(
+            session_id=session["session_id"],
+            user_id="user-1",
+            message_text="앱 만들어줘",
+            effective_message_text="앱 만들어줘",
+            request_id=3101,
+            request_type="command",
+            requires_approval=False,
+        )
+        request.status = "ambiguous"
+        request.task_snapshot = json.dumps(
+            {
+                "kind": "operation",
+                "title": "작업 확인",
+                "status": "ambiguous",
+                "request_type": "command",
+                "approval_state": "needs_clarification",
+                "next_actions": ["choose_option", "cancel"],
+                "clarification_type": "ambiguity",
+                "follow_up_prompt": {
+                    "kind": "choice",
+                    "options": [
+                        {"value": "프로젝트 생성", "label": "프로젝트 생성"},
+                        {"value": "애플리케이션 생성", "label": "애플리케이션 생성"},
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+        request.final_response = "요청이 모호합니다. 어떤 작업을 원하시나요?\n1. 프로젝트 생성\n2. 애플리케이션 생성"
+        db_session.commit()
+
+        response = client.post(
+            f"/chatops/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "2"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    assert stub_graph_service.last_message_text == "앱 만들어줘\n애플리케이션 생성"
+
+
+def test_create_request_rewrites_single_missing_input_follow_up_before_graph(db_session) -> None:
+    app = create_app()
+    stub_graph_service = StubGraphService()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return stub_graph_service
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/chatops/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        repo = RequestRepository(db_session)
+        request = repo.create(
+            session_id=session["session_id"],
+            user_id="user-1",
+            message_text="애플리케이션 생성해줘",
+            effective_message_text="애플리케이션 생성해줘",
+            request_id=3102,
+            request_type="command",
+            requires_approval=False,
+        )
+        request.status = "input_required"
+        request.missing_inputs = '["project_name"]'
+        request.task_snapshot = json.dumps(
+            {
+                "kind": "operation",
+                "title": "애플리케이션 생성",
+                "status": "input_required",
+                "request_type": "command",
+                "approval_state": "not_ready",
+                "next_actions": ["fill_inputs", "cancel"],
+                "clarification_type": "missing_input",
+                "missing_inputs": [{"key": "project_name", "label": "대상 프로젝트"}],
+                "follow_up_prompt": {
+                    "kind": "missing_input",
+                    "fields": [{"key": "project_name", "label": "대상 프로젝트"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        request.final_response = "대상 프로젝트를 알려주세요."
+        db_session.commit()
+
+        response = client.post(
+            f"/chatops/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "killblack"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    assert stub_graph_service.last_message_text == "project_name=killblack"
 
 
 def test_natural_language_approve_triggers_execution(db_session) -> None:

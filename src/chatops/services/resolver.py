@@ -24,7 +24,7 @@ from chatops.services.user_matcher import match_user
 KEY_VALUE_PATTERN = re.compile(r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(?P<value>[^\s,}]+)")
 JSON_BLOCK_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 NAME_PATTERNS = (
-    re.compile(r"(?:이름|프로젝트명|프로젝트 이름|앱 이름|애플리케이션 이름)\s*(?:은|는|이|가|:|=)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+?)(?:야|이야|입니다|이에요|예요)?(?:[.!?,\s]|$)"),
+    re.compile(r"(?:이름|프로젝트명|프로젝트 이름|앱 이름|애플리케이션 이름|어플리케이션 이름)\s*(?:은|는|이|가|:|=)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+?)(?:야|이야|입니다|이에요|예요)?(?:[.!?,\s]|$)"),
     re.compile(r"(?<![A-Za-z0-9._-])name\s*(?:은|는)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+?)(?:야|이야|입니다|이에요|예요)?(?:[.!?,\s]|$)", re.IGNORECASE),
 )
 NUMERIC_FIELD_PATTERNS = {
@@ -73,13 +73,14 @@ KOREAN_CPU_PATTERN = re.compile(
     re.IGNORECASE,
 )
 RENAMED_NAME_PATTERNS = (
-    re.compile(r"(?:이름|프로젝트명|프로젝트 이름|앱 이름|애플리케이션 이름)\s*(?:은|는|이|가|:|=)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+?)\s*로\s*(?:바꿔줘|바꿔|변경해줘|변경해|수정해줘|수정해|고쳐줘|고쳐)"),
+    re.compile(r"(?:이름|프로젝트명|프로젝트 이름|앱 이름|애플리케이션 이름|어플리케이션 이름)\s*(?:은|는|이|가|:|=)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+?)\s*로\s*(?:바꿔줘|바꿔|변경해줘|변경해|수정해줘|수정해|고쳐줘|고쳐)"),
 )
 PROJECT_NAME_PATTERNS = (
+    re.compile(r"(?:대상\s+프로젝트|프로젝트명|프로젝트\s+이름)\s*(?:은|는|이|가|:|=)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+)(?:[.!?,\s]|$)"),
     re.compile(r"(?P<value>[A-Za-z0-9._-]+)\s*프로젝트(?:에|를|을|은|는|이|가|\s|$)"),
 )
 APPLICATION_NAME_PATTERNS = (
-    re.compile(r"(?P<value>[A-Za-z0-9._-]+)\s*(?:앱|애플리케이션)(?:에|를|을|은|는|이|가|\s|$)"),
+    re.compile(r"(?P<value>[A-Za-z0-9._-]+)\s*(?:앱|애플리케이션|어플리케이션)(?:에|를|을|은|는|이|가|\s|$)"),
 )
 TARGET_NICKNAME_PATTERNS = (
     re.compile(r"(?P<value>[A-Za-z0-9._-]+)\s*멤버\s*추가"),
@@ -116,7 +117,7 @@ PROJECT_REFERENCE_CORRECTION_PATTERN = re.compile(
     r"(?P<old>[A-Za-z0-9._-]+)\s*프로젝트\s*(?:말고|아니고)\s*(?P<value>[A-Za-z0-9._-]+)\s*프로젝트"
 )
 APPLICATION_REFERENCE_CORRECTION_PATTERN = re.compile(
-    r"(?P<old>[A-Za-z0-9._-]+)\s*(?:앱|애플리케이션)\s*(?:말고|아니고)\s*(?P<value>[A-Za-z0-9._-]+)\s*(?:앱|애플리케이션)"
+    r"(?P<old>[A-Za-z0-9._-]+)\s*(?:앱|애플리케이션|어플리케이션)\s*(?:말고|아니고)\s*(?P<value>[A-Za-z0-9._-]+)\s*(?:앱|애플리케이션|어플리케이션)"
 )
 
 PROJECT_REFERENCE_OPERATION_IDS = {

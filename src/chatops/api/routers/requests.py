@@ -31,6 +31,7 @@ from chatops.schemas.requests import (
 from chatops.services.approval_intent import ApprovalIntent, detect_approval_intent
 from chatops.services.entity_memory_service import EntityMemoryService
 from chatops.services.events import EventService
+from chatops.services.follow_up_interpreter import FollowUpInterpreterService
 from chatops.services.session_summary_service import SessionSummaryService
 from chatops.services.session_messages import SessionMessageService
 
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sessions/{session_id}/requests", tags=["requests"], route_class=AuditRoute)
 entity_memory_service = EntityMemoryService()
 session_summary_service = SessionSummaryService()
+follow_up_interpreter = FollowUpInterpreterService()
 
 
 # ──────────────────────────────────────────────────
@@ -826,6 +828,7 @@ def create_request(
             "last_missing_inputs": _load_missing_inputs(previous_request.missing_inputs),
             "last_final_response": previous_request.final_response,
             "last_resolved_references": _load_json_field(previous_request.resolved_references),
+            "last_task_snapshot": _load_task_snapshot(previous_request.task_snapshot),
         }
     session_summary = session_summary_service.load(session_record.session_summary)
     session_context = entity_memory_service.merge_into_session_context(
@@ -888,9 +891,18 @@ def create_request(
             db_session.flush()
         # UNKNOWN falls through to normal flow
 
+    graph_message_text = payload.message
+    rewritten_follow_up = follow_up_interpreter.rewrite(
+        message_text=payload.message,
+        previous_request_status=previous_request.status if previous_request is not None else None,
+        session_context=session_context,
+    )
+    if rewritten_follow_up is not None:
+        graph_message_text = rewritten_follow_up.message_text
+
     preview = _preview_request(
         graph_service,
-        message_text=payload.message,
+        message_text=graph_message_text,
         session_context=session_context,
     )
     if preview is not None and preview.get("request_type") in {"inquiry", "query"}:
@@ -953,7 +965,7 @@ def create_request(
                 "session_id": session_id,
                 "user_id": auth.user_id,
                 "user_role": auth.user_role,
-                "message_text": payload.message,
+                "message_text": graph_message_text,
                 "session_context": session_context,
             },
             daemon=True,
@@ -964,7 +976,7 @@ def create_request(
         graph_service,
         session_id=session_id,
         user_id=auth.user_id,
-        message_text=payload.message,
+        message_text=graph_message_text,
         user_role=auth.user_role,
         session_context=session_context,
     )

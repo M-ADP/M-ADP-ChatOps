@@ -36,6 +36,7 @@ class TaskSnapshot(BaseModel):
     summary: str | None = None
     clarification_type: str | None = None
     is_ambiguous: bool = False
+    follow_up_prompt: dict[str, Any] | None = None
 
     model_config = ConfigDict(
         json_schema_extra={

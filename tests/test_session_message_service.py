@@ -33,3 +33,19 @@ def test_session_message_service_does_not_continue_irrelevant_message() -> None:
     )
 
     assert effective == "안녕"
+
+
+def test_session_message_service_continues_textual_follow_up_after_ambiguity() -> None:
+    service = SessionMessageService()
+
+    effective = service.effective_message_text(
+        {
+            "message_text": "애플리케이션 생성",
+            "session_context": {
+                "last_message_text": "생성해줘",
+                "last_request_status": "ambiguous",
+            },
+        }
+    )
+
+    assert effective == "생성해줘\n앱 생성"

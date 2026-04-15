@@ -54,6 +54,55 @@ def test_resolve_application_create_body_from_key_value_message() -> None:
     }
 
 
+def test_resolve_application_create_project_name_from_target_project_label() -> None:
+    entry = RegistryEntry(
+        id="application.create_apps",
+        source_file="apis/application.yaml",
+        operation_id=None,
+        path="/apps",
+        method="POST",
+        summary="애플리케이션 생성하기",
+        capability="애플리케이션 생성하기",
+        usable_in=("command",),
+        operation_kind="write",
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=True,
+        risk_level="medium",
+        side_effects=("애플리케이션 생성",),
+        required_headers=(),
+        required_inputs={
+            "headers": [],
+            "path": [],
+            "query": [],
+            "body": {
+                "required": True,
+                "required_fields": ["name", "cpu", "memory", "disk", "project_id", "port"],
+            },
+        },
+        preconditions=(),
+        missing_info_questions=(),
+        response_interpretation="생성 결과",
+        plan_template=(),
+        examples=(),
+    )
+
+    resolved = ParameterResolverService().resolve(
+        entry,
+        "어플리케이션 생성해, 앱 이름 : heyblackk, CPU 1, 메모리 1.2, 디스크 1, 대상 프로젝트 : killblack",
+    )
+
+    assert resolved == {
+        "body": {
+            "name": "heyblackk",
+            "cpu": 1,
+            "memory": 1.2,
+            "disk": 1,
+        },
+        "references": {"project_name": "killblack"},
+    }
+
+
 def test_resolve_monitoring_path_from_message() -> None:
     entry = RegistryEntry(
         id="monitoring.get_app_deployment_traffic",

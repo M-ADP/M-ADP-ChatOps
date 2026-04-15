@@ -13,8 +13,8 @@ TOKEN_PATTERN = re.compile(r"[가-힣A-Za-z0-9_./-]+")
 KEY_VALUE_PATTERN = re.compile(r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(?P<value>[^\s,}]+)")
 JSON_BLOCK_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 NAME_HINT_PATTERNS = (
-    re.compile(r"(?:이름|프로젝트명|프로젝트 이름|앱 이름|애플리케이션 이름)\s*(?:은|는|이|가|:|=)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+?)\s*로\s*(?:바꿔줘|바꿔|변경해줘|변경해|수정해줘|수정해|고쳐줘|고쳐)"),
-    re.compile(r"(?:이름|프로젝트명|프로젝트 이름|앱 이름|애플리케이션 이름)\s*(?:은|는|이|가|:|=)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+?)(?:야|이야|입니다|이에요|예요)?(?:[.!?,\s]|$)"),
+    re.compile(r"(?:이름|프로젝트명|프로젝트 이름|앱 이름|애플리케이션 이름|어플리케이션 이름)\s*(?:은|는|이|가|:|=)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+?)\s*로\s*(?:바꿔줘|바꿔|변경해줘|변경해|수정해줘|수정해|고쳐줘|고쳐)"),
+    re.compile(r"(?:이름|프로젝트명|프로젝트 이름|앱 이름|애플리케이션 이름|어플리케이션 이름)\s*(?:은|는|이|가|:|=)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+?)(?:야|이야|입니다|이에요|예요)?(?:[.!?,\s]|$)"),
     re.compile(r"(?<![A-Za-z0-9._-])name\s*(?:은|는)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+?)(?:야|이야|입니다|이에요|예요)?(?:[.!?,\s]|$)", re.IGNORECASE),
 )
 PROJECT_ID_HINT_PATTERNS = (
@@ -22,10 +22,11 @@ PROJECT_ID_HINT_PATTERNS = (
     re.compile(r"프로젝트\s+(?P<value>\d+)(?:번)?\s*(?:을|를)?\s*(?:지워줘|지워|삭제해줘|삭제해|제거해줘|제거해|이름을|이름)\b"),
 )
 PROJECT_NAME_HINT_PATTERNS = (
+    re.compile(r"(?:대상\s+프로젝트|프로젝트명|프로젝트\s+이름)\s*(?:은|는|이|가|:|=)?\s*[\"']?(?P<value>[A-Za-z0-9._-]+)(?:[.!?,\s]|$)"),
     re.compile(r"(?P<value>[A-Za-z0-9._-]+)\s*프로젝트(?:에|를|을|은|는|이|가|\s|$)"),
 )
 APPLICATION_NAME_HINT_PATTERNS = (
-    re.compile(r"(?P<value>[A-Za-z0-9._-]+)\s*(?:앱|애플리케이션)(?:에|를|을|은|는|이|가|\s|$)"),
+    re.compile(r"(?P<value>[A-Za-z0-9._-]+)\s*(?:앱|애플리케이션|어플리케이션)(?:에|를|을|은|는|이|가|\s|$)"),
 )
 TARGET_NICKNAME_HINT_PATTERNS = (
     re.compile(r"(?P<value>[A-Za-z0-9._-]+)\s*멤버\s*추가"),
@@ -42,9 +43,11 @@ TOKEN_ALIASES = {
     "project": {"project", "프로젝트"},
     "프로젝트": {"project", "프로젝트"},
     "projects": {"project", "projects", "프로젝트"},
-    "application": {"application", "app", "apps", "애플리케이션", "앱"},
-    "app": {"application", "app", "apps", "애플리케이션", "앱"},
-    "앱": {"application", "app", "apps", "애플리케이션", "앱"},
+    "application": {"application", "app", "apps", "애플리케이션", "어플리케이션", "앱"},
+    "app": {"application", "app", "apps", "애플리케이션", "어플리케이션", "앱"},
+    "앱": {"application", "app", "apps", "애플리케이션", "어플리케이션", "앱"},
+    "애플리케이션": {"application", "app", "apps", "애플리케이션", "어플리케이션", "앱"},
+    "어플리케이션": {"application", "app", "apps", "애플리케이션", "어플리케이션", "앱"},
     "list": {"list", "목록", "리스트", "보여줘", "조회"},
     "목록": {"list", "목록", "리스트", "보여줘", "조회"},
     "리스트": {"list", "목록", "리스트", "보여줘", "조회"},
@@ -325,29 +328,31 @@ class RegistryService:
         if self._is_resource_update_request(user_text):
             if entry.id == "project.update_resource":
                 score += 14
-            elif entry.id == "application.patch_apps_resources" and any(marker in user_text for marker in ("앱", "애플리케이션", "app")):
+            elif entry.id == "application.patch_apps_resources" and self._has_application_context(user_text):
                 score += 14
             elif entry.id in {"project.create", "project.update_name"}:
                 score -= 6
             elif entry.operation_kind == "delete":
                 score -= 10
         if self._is_create_request(user_text):
-            has_project_context = "프로젝트" in user_text
-            has_application_context = any(marker in user_text for marker in ("앱", "애플리케이션", "app"))
+            has_project_context = self._has_project_context(user_text)
+            has_application_context = self._has_application_context(user_text)
             if entry.id == "application.create_apps" and has_application_context:
                 score += 12
             elif entry.id == "project.create" and has_project_context and not has_application_context:
                 score += 12
+            elif entry.id == "project.create" and has_application_context:
+                score -= 12
             elif entry.operation_kind == "delete":
                 score -= 8
             elif entry.id in {"application.patch_apps_github", "application.patch_apps_resources", "project.update_resource"}:
                 score -= 4
         if self._is_delete_request(user_text) and entry.operation_kind == "delete":
             score += 6
-            has_application_context = any(marker in user_text for marker in ("앱", "애플리케이션", "app"))
+            has_application_context = self._has_application_context(user_text)
             if entry.id == "application.delete_apps" and has_application_context:
                 score += 8
-            if entry.id == "project.delete" and "프로젝트" in user_text:
+            if entry.id == "project.delete" and self._has_project_context(user_text):
                 score += 4
             if entry.id == "project.delete" and has_application_context:
                 score -= 10
@@ -402,32 +407,51 @@ class RegistryService:
         )
 
     def _is_resource_limit_request(self, user_text: str) -> bool:
-        return "프로젝트" in user_text and "리소스" in user_text and any(marker in user_text for marker in ("한도", "제한"))
+        return self._has_project_context(user_text) and "리소스" in user_text and any(
+            marker in user_text for marker in ("한도", "제한")
+        )
 
     def _is_owner_check_request(self, user_text: str) -> bool:
         lowered = user_text.lower()
-        return "프로젝트" in user_text and any(marker in lowered for marker in ("owner", "소유자"))
+        return self._has_project_context(user_text) and any(marker in lowered for marker in ("owner", "소유자"))
 
     def _is_available_check_request(self, user_text: str) -> bool:
-        return "프로젝트" in user_text and any(marker in user_text for marker in ("접근 가능", "사용 가능", "가능한지", "가능해"))
+        return self._has_project_context(user_text) and any(
+            marker in user_text for marker in ("접근 가능", "사용 가능", "가능한지", "가능해")
+        )
 
     def _is_project_detail_request(self, user_text: str) -> bool:
-        return "프로젝트" in user_text and any(marker in user_text for marker in ("상세", "자세히", "정보")) and "앱" not in user_text
+        return (
+            self._has_project_context(user_text)
+            and any(marker in user_text for marker in ("상세", "자세히", "정보"))
+            and not self._has_application_context(user_text)
+        )
 
     def _is_app_list_request(self, user_text: str) -> bool:
-        return "프로젝트" in user_text and any(marker in user_text for marker in ("앱", "애플리케이션")) and any(
+        return self._has_project_context(user_text) and self._has_application_context(user_text) and any(
             marker in user_text for marker in ("목록", "리스트", "보여", "조회")
         )
 
     def _is_app_status_request(self, user_text: str) -> bool:
-        return any(marker in user_text for marker in ("앱", "애플리케이션")) and "상태" in user_text
+        return self._has_application_context(user_text) and "상태" in user_text
 
     def _is_app_logs_request(self, user_text: str) -> bool:
-        return any(marker in user_text for marker in ("앱", "애플리케이션")) and "로그" in user_text
+        return self._has_application_context(user_text) and "로그" in user_text
 
     def _is_app_details_request(self, user_text: str) -> bool:
-        return any(marker in user_text for marker in ("앱", "애플리케이션")) and any(
+        return self._has_application_context(user_text) and any(
             marker in user_text for marker in ("상세", "자세히", "정보")
+        )
+
+    @staticmethod
+    def _has_project_context(user_text: str) -> bool:
+        return "프로젝트" in user_text
+
+    @staticmethod
+    def _has_application_context(user_text: str) -> bool:
+        lowered = user_text.lower()
+        return any(marker in user_text for marker in ("앱", "애플리케이션", "어플리케이션")) or any(
+            marker in lowered for marker in ("app", "application")
         )
 
     def _tokenize(self, text: str) -> set[str]:

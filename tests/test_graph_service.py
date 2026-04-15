@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from chatops.domain.enums import RequestStatus
 from chatops.graph.service import GraphService
 from chatops.services.registry import RegistryEntry, ScoredCandidate
+from chatops.services.registry import RegistryService
 from chatops.services.resolver import ParameterResolverService
 
 
@@ -845,6 +846,10 @@ def test_query_ambiguity_returns_clarification_without_dispatch() -> None:
     assert result.error_code == "AMBIGUOUS_OPERATION"
     assert result.final_response == "프로젝트 상태인가요, 앱 상태인가요?"
     assert result.clarification_type == "ambiguity"
+    assert result.task_snapshot is not None
+    assert result.task_snapshot["title"] == "작업 확인"
+    assert result.task_snapshot["follow_up_prompt"]["kind"] == "choice"
+    assert result.task_snapshot["follow_up_prompt"]["options"][1]["label"] == "앱 상태 조회"
     assert dispatcher.last_resolved_inputs is None
 
 
@@ -896,6 +901,12 @@ def test_query_missing_inputs_asks_before_dispatch() -> None:
     assert result.missing_inputs == ["project_name", "application_name"]
     assert result.final_response == "어느 프로젝트의 어떤 앱인지 알려주세요."
     assert result.clarification_type == "missing_input"
+    assert result.task_snapshot is not None
+    assert result.task_snapshot["follow_up_prompt"]["kind"] == "missing_input"
+    assert [field["key"] for field in result.task_snapshot["follow_up_prompt"]["fields"]] == [
+        "project_name",
+        "application_name",
+    ]
     assert dispatcher.last_resolved_inputs is None
 
 
@@ -924,6 +935,47 @@ def test_input_required_follow_up_message_continues_previous_command() -> None:
     assert "실행할까요" in result.final_response
     assert "project.create" not in result.final_response
     assert "프로젝트 이름 demo" in result.final_response
+
+
+def test_graph_service_normalizes_colloquial_application_create_request() -> None:
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=RegistryService.from_directory("ai_registry"),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="어플 생성해줘ㅡ",
+    )
+
+    assert result.status == "input_required"
+    assert result.task_snapshot is not None
+    assert result.task_snapshot["operation_id"] == "application.create_apps"
+    assert result.effective_message_text == "앱 생성해줘"
+
+
+def test_graph_service_normalizes_project_shorthand_query() -> None:
+    graph_service = GraphService(
+        llm_service=FakeLLMService(),
+        registry_service=RegistryService.from_directory("ai_registry"),
+        adapter_service=FakeDownstreamDispatcher(),
+        resolver_service=ParameterResolverService(),
+    )
+
+    result = graph_service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="프젝 목록 보여줘",
+        user_role="admin",
+    )
+
+    assert result.status == "completed"
+    assert result.task_snapshot is not None
+    assert result.task_snapshot["operation_id"] == "project.list_projects"
+    assert result.effective_message_text == "프로젝트 목록 보여줘"
 
 
 def test_input_required_message_is_conversational_question() -> None:
