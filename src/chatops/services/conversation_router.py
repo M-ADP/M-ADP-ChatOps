@@ -68,6 +68,17 @@ class ConversationRouterService:
         session_context: dict[str, Any] | None,
     ) -> ConversationRouteDecision:
         normalized = self.normalizer.normalize(message_text).lower()
+        explicit_social = normalized in _SOCIAL_EXACT
+        explicit_task = self._has_explicit_task_signal(normalized)
+
+        if explicit_social and not explicit_task:
+            return ConversationRouteDecision(
+                route="small_talk",
+                social_score=0.98,
+                task_score=0.05,
+                response=self._small_talk_response(normalized),
+            )
+
         social_score = self._social_score(normalized)
         task_score = self._task_score(normalized, session_context)
 
@@ -135,3 +146,7 @@ class ConversationRouterService:
         if "고마" in normalized or "감사" in normalized or "thank" in normalized:
             return "도움이 되어 다행입니다. 이어서 필요한 작업을 말씀해 주세요."
         return "안녕하세요. 무엇을 도와드릴까요? 예: 프로젝트 생성해줘, 앱 생성해줘, 프로젝트 목록 보여줘"
+
+    @staticmethod
+    def _has_explicit_task_signal(normalized: str) -> bool:
+        return any(marker in normalized for marker in _TASK_MARKERS) or "=" in normalized or ":" in normalized
