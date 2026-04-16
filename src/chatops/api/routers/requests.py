@@ -32,6 +32,7 @@ from chatops.schemas.requests import (
 from chatops.services.approval_intent import ApprovalIntent, detect_approval_intent
 from chatops.services.conversation_router import ConversationRouterService
 from chatops.services.entity_memory_service import EntityMemoryService
+from chatops.services.easter_egg_service import EasterEggService
 from chatops.services.events import EventService
 from chatops.services.follow_up_interpreter import FollowUpInterpreterService
 from chatops.services.session_summary_service import SessionSummaryService
@@ -44,6 +45,15 @@ entity_memory_service = EntityMemoryService()
 session_summary_service = SessionSummaryService()
 follow_up_interpreter = FollowUpInterpreterService()
 conversation_router = ConversationRouterService()
+easter_egg_service = EasterEggService({
+    "조재민": "안녕하세요, 저는 조재민이고 현재 윤도훈, 오주현과 삼각관계에 있습니다. 저는 두명 둘 다 좋아합니다 ㅎㅎ.",
+    "박동현": "안녕하세요, 네카라쿠텔에 텔에 다니고 있는 박동현입니다. 그리고 저는 콧구멍을 너무 좋아합니다. 콧구멍만 보면, 심장이 너무 뜁니다. 아흣~퇴적암에서 퇴적작용을 해서 퇴물이 되었습니다.",
+    "김동욱": "안녕하세요, 까만, 검정색의, 거먼, 흑, 흑인, 똥, 백엔드 엔지니어 김동욱입니다. 저는 남자만 보면 참을 수가 없습니다 후…",
+    "방세준": "안녕하세요, 방세준입니다. 저는 동현을 보면서 느낍니다 흐흣~ 므흣~ 그리고 그 영감을 토대로 뮤지컬 무대를 설계하고, 뮤지컬 배우가 될 것입니다~~~",
+    "윤도훈": "안녕하세요, 현 정권이 너무 좋아 공기업을 지망하는 윤도훈입니다 😍",
+    "오주현": "안녕하세요, 한 사람을 위해 40년 인생도 가져다 바칠 수 있는 오주현입니다. 저는 피크닉을 사랑하며 현재 몰래 캠코에 지원한 상태입니다. 최근에 피크닉 레몬맛이 나왔던데 빨리 이것도 가져다 바치고 싶네요.",
+    "서정현": "안녕하세요, 프론트와 디자인의 경계를 허무는 개발자 서정현입니다. 요즘은 스케일이 커져서 세상을 허물고 싶어 하지만, 현재는 화면 구성 정도로 만족하고 있습니다.",
+})
 
 
 # ──────────────────────────────────────────────────
@@ -209,6 +219,10 @@ def _build_request_response(record: RequestRecord, message_text: str) -> Request
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
+
+def _decorate_final_response(message_text: str | None, final_response: str | None) -> str | None:
+    return easter_egg_service.decorate_response(message_text=message_text, response_text=final_response)
 
 
 def _build_event_response(record) -> RequestEventResponse:
@@ -761,7 +775,7 @@ def _process_async_request(
         record.requires_approval = graph_result.requires_approval
         record.effective_message_text = graph_result.effective_message_text
         record.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
-        record.final_response = graph_result.final_response
+        record.final_response = _decorate_final_response(record.message_text, graph_result.final_response)
         record.resolved_references = _dump_json_field(graph_result.resolved_references)
         record.task_snapshot = _dump_json_field(graph_result.task_snapshot)
         record.plan_object = _dump_json_field(graph_result.plan_object)
@@ -796,7 +810,10 @@ def _process_async_request(
         record = repo.get_for_user(request_id=request_id, user_id=user_id)
         if record is not None and not RequestStatus(record.status).is_terminal:
             record.status = RequestStatus.FAILED.value
-            record.final_response = "요청 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            record.final_response = _decorate_final_response(
+                record.message_text,
+                "요청 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            )
             worker_session.commit()
             _append_structured_event(
                 EventService(worker_session),
@@ -995,7 +1012,7 @@ def create_request(
             requires_approval=False,
         )
         record.status = RequestStatus.COMPLETED.value
-        record.final_response = route_decision.response
+        record.final_response = _decorate_final_response(record.message_text, route_decision.response)
         if superseded_request is not None:
             _supersede_pending_request(superseded_request, replacement_request_id=record.id)
         db_session.commit()
@@ -1117,7 +1134,7 @@ def create_request(
     )
     record.status = graph_result.status
     record.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
-    record.final_response = graph_result.final_response
+    record.final_response = _decorate_final_response(record.message_text, graph_result.final_response)
     record.resolved_references = _dump_json_field(graph_result.resolved_references)
     record.task_snapshot = _dump_json_field(graph_result.task_snapshot)
     record.plan_object = _dump_json_field(graph_result.plan_object)
@@ -1197,10 +1214,10 @@ def _handle_natural_language_approval(
                 session_id=previous_request.session_id,
                 status=previous_request.status,
                 message=message_text,
-                assistant_message="이 요청은 현재 처리 중입니다.",
+                assistant_message=_decorate_final_response(message_text, "이 요청은 현재 처리 중입니다."),
                 request_type=previous_request.request_type,
                 requires_approval=False,
-                final_response="이 요청은 현재 처리 중입니다.",
+                final_response=_decorate_final_response(message_text, "이 요청은 현재 처리 중입니다."),
                 created_at=previous_request.created_at,
                 updated_at=previous_request.updated_at,
             )
@@ -1213,10 +1230,10 @@ def _handle_natural_language_approval(
                 session_id=previous_request.session_id,
                 status=previous_request.status,
                 message=message_text,
-                assistant_message="이 요청은 이미 처리되었습니다.",
+                assistant_message=_decorate_final_response(message_text, "이 요청은 이미 처리되었습니다."),
                 request_type=previous_request.request_type,
                 requires_approval=False,
-                final_response="이 요청은 이미 처리되었습니다.",
+                final_response=_decorate_final_response(message_text, "이 요청은 이미 처리되었습니다."),
                 created_at=previous_request.created_at,
                 updated_at=previous_request.updated_at,
             )
@@ -1236,7 +1253,7 @@ def _handle_natural_language_approval(
     )
     previous_request.status = graph_result.status
     previous_request.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
-    previous_request.final_response = graph_result.final_response
+    previous_request.final_response = _decorate_final_response(message_text, graph_result.final_response)
     previous_request.requires_approval = graph_result.requires_approval
     previous_request.task_snapshot = _dump_json_field(graph_result.task_snapshot)
     previous_request.plan_object = _dump_json_field(graph_result.plan_object)
@@ -1292,7 +1309,7 @@ def _handle_natural_language_rejection(
     )
     previous_request.status = graph_result.status
     previous_request.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
-    previous_request.final_response = graph_result.final_response
+    previous_request.final_response = _decorate_final_response(message_text, graph_result.final_response)
     previous_request.requires_approval = graph_result.requires_approval
     previous_request.task_snapshot = _dump_json_field(graph_result.task_snapshot)
     previous_request.plan_object = _dump_json_field(graph_result.plan_object)
@@ -1419,7 +1436,7 @@ def approve_request(
     )
     record.status = graph_result.status
     record.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
-    record.final_response = graph_result.final_response
+    record.final_response = _decorate_final_response(record.message_text, graph_result.final_response)
     record.requires_approval = graph_result.requires_approval
     record.task_snapshot = _dump_json_field(graph_result.task_snapshot)
     record.plan_object = _dump_json_field(graph_result.plan_object)
@@ -1483,7 +1500,7 @@ def reject_request(
     )
     record.status = graph_result.status
     record.missing_inputs = _dump_missing_inputs(graph_result.missing_inputs)
-    record.final_response = graph_result.final_response
+    record.final_response = _decorate_final_response(record.message_text, graph_result.final_response)
     record.requires_approval = graph_result.requires_approval
     record.task_snapshot = _dump_json_field(graph_result.task_snapshot)
     record.plan_object = _dump_json_field(graph_result.plan_object)

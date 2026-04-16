@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
+from chatops.api.routers import requests as requests_router
 from chatops.api.dependencies import get_db_session, get_graph_service
 from chatops.app import create_app
 from chatops.db.repositories import (
@@ -47,6 +48,8 @@ class StubGraphService:
     resolved_references: dict[str, object] | None = None
     resolved_ids: dict[str, object] | None = None
     last_message_text: str | None = None
+    handle_final_response: str | None = None
+    resume_final_response: str | None = None
 
     def handle_request(
         self,
@@ -69,7 +72,7 @@ class StubGraphService:
             request_type="command",
             requires_approval=self.requires_approval,
             intent="execute_command",
-            final_response=None,
+            final_response=self.handle_final_response,
             selected_operation_ids=["project.create"],
             missing_inputs=self.missing_inputs,
             effective_message_text=self.effective_message_text,
@@ -100,7 +103,11 @@ class StubGraphService:
             request_type="command",
             requires_approval=False,
             intent="execute_command",
-            final_response="명령 실행 완료" if approval_granted else "명령 실행 거절",
+            final_response=(
+                self.resume_final_response
+                if self.resume_final_response is not None
+                else ("명령 실행 완료" if approval_granted else "명령 실행 거절")
+            ),
             selected_operation_ids=["project.create"],
             missing_inputs=None,
             effective_message_text=self.effective_message_text,
@@ -1010,7 +1017,6 @@ def test_create_request_handles_small_talk_without_graph_execution(db_session) -
     assert "안녕하세요" in body["assistant_message"]
     assert stub_graph_service.last_message_text is None
 
-
 def test_create_request_logs_small_talk_route_trace(db_session, caplog) -> None:
     app = create_app()
     stub_graph_service = StubGraphService()
@@ -1116,6 +1122,51 @@ def test_create_request_logs_follow_up_rewrite_trace(db_session, caplog) -> None
     assert rewrite_payload["decision"] == "rewritten"
     assert rewrite_payload["data"]["original_message"] == "killblack"
     assert rewrite_payload["data"]["rewritten_message"] == "project_name=killblack"
+
+
+def test_create_request_decorates_final_response_with_easter_egg(db_session, monkeypatch) -> None:
+    app = create_app()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        stub = StubGraphService()
+        stub.status = "completed"
+        stub.requires_approval = False
+        stub.next_request_id = 2001
+        stub.handle_final_response = "명령 실행 완료"
+        return stub
+
+    monkeypatch.setattr(
+        requests_router,
+        "easter_egg_service",
+        requests_router.EasterEggService({"조재민": "조재민 이스터에그"}),
+    )
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/chatops/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        response = client.post(
+            f"/chatops/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "조재민 프로젝트 생성해줘"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["assistant_message"] == "명령 실행 완료\n\n조재민 이스터에그"
+    request = RequestRepository(db_session).get_for_user(request_id=body["request_id"], user_id="user-1")
+    assert request is not None
+    assert request.final_response == "명령 실행 완료\n\n조재민 이스터에그"
 
 
 def test_natural_language_approve_triggers_execution(db_session) -> None:
