@@ -246,7 +246,7 @@ def test_supported_command_entries_define_important_inputs() -> None:
     assert project_create.important_inputs["body"] == ["name", "max_cpu", "max_memory", "max_disk"]
 
     assert application_create is not None
-    assert application_create.important_inputs["body"] == ["project_id", "name", "cpu", "memory", "disk", "port"]
+    assert application_create.important_inputs["body"] == ["project_id", "name", "cpu", "memory", "disk"]
 
     assert project_update_resource is not None
     assert project_update_resource.important_inputs["body"] == ["max_cpu", "max_memory", "max_disk"]

@@ -37,5 +37,4 @@ def test_load_operations_extracts_required_body_fields_from_schema_ref() -> None
         "memory",
         "disk",
         "project_id",
-        "port",
     ]
