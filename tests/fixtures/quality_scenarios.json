@@ -4,146 +4,162 @@
     "message_text": "내 프로젝트 목록 보여줘",
     "expectation": {
       "status": "completed",
-      "request_type": "query",
+      "request_type": "agent",
       "dispatched": true
-    }
+    },
+    "session_id": 5000
   },
   {
     "name": "query project detail",
     "message_text": "demo 프로젝트 자세히 보여줘",
     "expectation": {
       "status": "completed",
-      "request_type": "query",
+      "request_type": "agent",
       "dispatched": true
-    }
+    },
+    "session_id": 5001
   },
   {
     "name": "query project members",
     "message_text": "demo 프로젝트 멤버 목록 보여줘",
     "expectation": {
       "status": "completed",
-      "request_type": "query",
+      "request_type": "agent",
       "dispatched": true
-    }
+    },
+    "session_id": 5002
   },
   {
     "name": "query application list",
     "message_text": "demo 프로젝트 앱 목록 보여줘",
     "expectation": {
       "status": "completed",
-      "request_type": "query",
+      "request_type": "agent",
       "dispatched": true
-    }
+    },
+    "session_id": 5003
   },
   {
     "name": "query app status",
     "message_text": "demo 프로젝트 api-server 앱 상태 보여줘",
     "expectation": {
       "status": "completed",
-      "request_type": "query",
+      "request_type": "agent",
       "dispatched": true
-    }
+    },
+    "session_id": 5004
   },
   {
     "name": "query app logs",
     "message_text": "demo 프로젝트 api-server 앱 로그 보여줘",
     "expectation": {
       "status": "completed",
-      "request_type": "query",
+      "request_type": "agent",
       "dispatched": true
-    }
+    },
+    "session_id": 5005
   },
   {
     "name": "query app details",
     "message_text": "demo 프로젝트 api-server 앱 정보 보여줘",
     "expectation": {
       "status": "completed",
-      "request_type": "query",
+      "request_type": "agent",
       "dispatched": true
-    }
+    },
+    "session_id": 5006
   },
   {
     "name": "query monitoring recent hour",
     "message_text": "demo 프로젝트 api-server 앱 최근 1시간 트래픽 보여줘",
     "expectation": {
       "status": "completed",
-      "request_type": "query",
+      "request_type": "agent",
       "dispatched": true
-    }
+    },
+    "session_id": 5007
   },
   {
     "name": "query monitoring recent 30 min",
     "message_text": "demo 프로젝트 api-server 앱 최근 30분 트래픽 보여줘",
     "expectation": {
       "status": "completed",
-      "request_type": "query",
+      "request_type": "agent",
       "dispatched": true
-    }
+    },
+    "session_id": 5008
   },
   {
     "name": "query monitoring today",
     "message_text": "demo 프로젝트 api-server 앱 오늘 트래픽 보여줘",
     "expectation": {
       "status": "completed",
-      "request_type": "query",
+      "request_type": "agent",
       "dispatched": true
-    }
+    },
+    "session_id": 5009
   },
   {
     "name": "query missing inputs",
     "message_text": "앱 상태 보여줘",
     "expectation": {
-      "status": "input_required",
-      "request_type": "query",
-      "missing_inputs": ["project_name", "application_name"],
+      "status": "completed",
+      "request_type": "agent",
       "dispatched": false
-    }
+    },
+    "session_id": 5010
   },
   {
     "name": "query ambiguous status",
     "message_text": "demo 상태 보여줘",
     "expectation": {
-      "status": "ambiguous",
-      "request_type": "query",
+      "status": "completed",
+      "request_type": "agent",
       "dispatched": false
-    }
+    },
+    "session_id": 5011
   },
   {
     "name": "query invalid project",
     "message_text": "ghost 프로젝트 상세 보여줘",
     "expectation": {
-      "request_type": "query"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5012
   },
   {
     "name": "query invalid application",
     "message_text": "demo 프로젝트 ghost 앱 상태 보여줘",
     "expectation": {
-      "request_type": "query"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5013
   },
   {
     "name": "query permission denied",
     "message_text": "demo 프로젝트 owner 여부 확인해줘",
     "expectation": {
-      "request_type": "query"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5014
   },
   {
     "name": "query incomplete downstream payload",
     "message_text": "demo 프로젝트 api-server 앱 리소스 사용량 보여줘",
     "expectation": {
-      "request_type": "query"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5015
   },
   {
     "name": "command create project missing values",
     "message_text": "프로젝트 하나 만들어줘",
     "expectation": {
-      "status": "input_required",
-      "request_type": "command",
+      "status": "completed",
+      "request_type": "agent",
       "dispatched": false
-    }
+    },
+    "session_id": 5016
   },
   {
     "name": "command create project complete",
@@ -154,77 +170,87 @@
       "last_request_type": "command"
     },
     "expectation": {
-      "status": "pending_approval",
-      "request_type": "command",
+      "status": "interrupted",
+      "request_type": "agent",
       "dispatched": false
-    }
+    },
+    "session_id": 5017
   },
   {
     "name": "command rename project",
     "message_text": "demo 프로젝트 이름을 renamed로 바꿔줘",
     "expectation": {
-      "request_type": "command"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5018
   },
   {
     "name": "command delete project high risk",
     "message_text": "demo 프로젝트 삭제해줘",
     "expectation": {
-      "status": "pending_approval",
-      "request_type": "command",
+      "status": "interrupted",
+      "request_type": "agent",
       "dispatched": false
-    }
+    },
+    "session_id": 5019
   },
   {
     "name": "command remove member high risk",
     "message_text": "demo 프로젝트에서 alice 멤버 제거해줘",
     "expectation": {
-      "status": "pending_approval",
-      "request_type": "command",
+      "status": "interrupted",
+      "request_type": "agent",
       "dispatched": false
-    }
+    },
+    "session_id": 5020
   },
   {
     "name": "command add member",
     "message_text": "demo 프로젝트에 alice 멤버 추가해줘",
     "expectation": {
-      "request_type": "command"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5021
   },
   {
     "name": "command transfer ownership",
     "message_text": "demo 프로젝트 소유권을 alice에게 넘겨줘",
     "expectation": {
-      "request_type": "command"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5022
   },
   {
     "name": "command create application",
     "message_text": "demo 프로젝트에 api-server 앱 만들어줘 cpu 1 memory 512 disk 10 port 8080",
     "expectation": {
-      "request_type": "command"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5023
   },
   {
     "name": "command update github config",
     "message_text": "demo 프로젝트 api-server 앱 github owner는 M-ADP repo는 sample branch는 main으로 연결해줘",
     "expectation": {
-      "request_type": "command"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5024
   },
   {
     "name": "command delete application",
     "message_text": "demo 프로젝트 api-server 앱 삭제해줘",
     "expectation": {
-      "request_type": "command"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5025
   },
   {
     "name": "command scale resources",
     "message_text": "demo 프로젝트 api-server 앱 cpu를 2로 늘려줘",
     "expectation": {
-      "request_type": "command"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5026
   },
   {
     "name": "command correction supersedes old approval",
@@ -235,25 +261,28 @@
       "last_request_type": "command"
     },
     "expectation": {
-      "request_type": "command"
-    }
+      "request_type": "agent"
+    },
+    "session_id": 5027
   },
   {
     "name": "inquiry supported",
     "message_text": "프로젝트 생성 방법 알려줘",
     "expectation": {
       "status": "completed",
-      "request_type": "inquiry",
+      "request_type": "agent",
       "dispatched": false
-    }
+    },
+    "session_id": 5028
   },
   {
     "name": "inquiry unsupported",
     "message_text": "프로젝트 백업 방법 알려줘",
     "expectation": {
       "status": "completed",
-      "request_type": "inquiry",
+      "request_type": "agent",
       "dispatched": false
-    }
+    },
+    "session_id": 5029
   }
 ]

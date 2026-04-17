@@ -4,15 +4,31 @@ from dataclasses import dataclass
 import json
 import logging
 
+import pytest
+
 from chatops.db.repositories import RequestRepository, SessionRepository
 from chatops.graph.service import GraphService
 from chatops.services.events import EventService
 from chatops.services.registry import RegistryEntry, ScoredCandidate
 from chatops.services.resolver import ParameterResolverService
+from tests.test_agent_loop import (
+    FakeAgentLLMService,
+    FakeAgentResolverService,
+    _text_response,
+    _tool_use_response,
+)
 
 
 @dataclass
 class _FakeLLMService:
+    def converse_with_tools(self, messages, system_prompt, tool_specs):
+        return {
+            "stop_reason": "end_turn",
+            "assistant_message": {"role": "assistant", "content": [{"text": "응답"}]},
+            "tool_calls": [],
+            "text_content": "응답",
+        }
+
     def classify(self, message_text: str) -> dict[str, object]:
         del message_text
         return {
@@ -132,6 +148,9 @@ def _command_entry(entry_id: str) -> RegistryEntry:
 
 @dataclass
 class _FallbackRegistryService:
+    def all_enabled_entries(self) -> list[RegistryEntry]:
+        return [_query_entry("application.get_apps_logs")]
+
     def find_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[RegistryEntry]:
         del user_text, limit
         assert usable_in == "query"
@@ -219,27 +238,34 @@ def _parse_log_json(record: logging.LogRecord) -> dict[str, object]:
 
 
 def test_downstream_execution_logs_include_fallback_and_request_context(caplog) -> None:
-    caplog.set_level(logging.INFO, logger="chatops.graph.nodes")
+    """execute_tool 노드가 downstream_execution 로그를 status_code/fallback_used/latency_ms와 함께 남긴다."""
+    caplog.set_level(logging.INFO, logger="chatops.graph.agent_loop")
+
+    llm = FakeAgentLLMService(responses=[
+        # LLM이 get_apps_logs 도구 호출 → dispatcher가 404 반환
+        _tool_use_response("application__get_apps_logs", {}),
+        # 실패 결과 받고 설명 응답
+        _text_response("죄송합니다, 리소스를 찾지 못했습니다."),
+    ])
     graph_service = GraphService(
-        llm_service=_FakeLLMService(),
+        llm_service=llm,
         registry_service=_FallbackRegistryService(),
-        adapter_service=_FallbackDispatcher(),
-        resolver_service=ParameterResolverService(),
+        downstream_dispatcher=_FallbackDispatcher(),
+        resolver_service=FakeAgentResolverService(),
     )
 
     result = graph_service.handle_request(
         session_id=1001,
         user_id="user-1",
         message_text="앱 로그 보여줘",
+        request_id=9901,
     )
 
-    assert result.status == "input_required"
-    assert result.verifier_decision is not None
-    assert result.verifier_decision["decision"] == "clarify"
-    execution_logs = [record for record in caplog.records if record.getMessage().startswith("downstream_execution ")]
-    assert execution_logs
+    assert result.status == "completed"
+    execution_logs = [r for r in caplog.records if r.getMessage().startswith("downstream_execution ")]
+    assert execution_logs, "downstream_execution 로그가 없습니다"
     payload = _parse_log_json(execution_logs[-1])
-    assert payload["request_id"] == result.request_id
+    assert payload["request_id"] == 9901
     assert payload["session_id"] == 1001
     assert payload["user_id"] == "user-1"
     assert payload["operation"] == "application.get_apps_logs"
@@ -250,32 +276,37 @@ def test_downstream_execution_logs_include_fallback_and_request_context(caplog) 
     assert isinstance(payload["latency_ms"], float)
 
 
-def test_clarification_logs_include_type_and_request_context(caplog) -> None:
-    caplog.set_level(logging.INFO, logger="chatops.graph.nodes")
+def test_agent_response_logs_decision_trace(caplog) -> None:
+    """LLM이 텍스트로 응답(도구 미사용)하면 decision_trace stage='agent_response' 로그가 남는다."""
+    caplog.set_level(logging.INFO, logger="chatops.decision_trace")
+
+    llm = FakeAgentLLMService(responses=[
+        _text_response("죄송합니다, 어떤 앱의 로그를 원하시는지 알려주세요."),
+    ])
     graph_service = GraphService(
-        llm_service=_FakeLLMService(),
-        registry_service=_AmbiguousRegistryService(),
-        adapter_service=_FallbackDispatcher(),
-        resolver_service=ParameterResolverService(),
+        llm_service=llm,
+        registry_service=_FallbackRegistryService(),
+        downstream_dispatcher=_FallbackDispatcher(),
+        resolver_service=FakeAgentResolverService(),
     )
 
     result = graph_service.handle_request(
         session_id=1002,
         user_id="user-2",
         message_text="demo 상태 보여줘",
+        request_id=9902,
     )
 
-    assert result.status == "ambiguous"
-    clarification_logs = [record for record in caplog.records if record.getMessage().startswith("clarification_event ")]
-    assert clarification_logs
-    payload = _parse_log_json(clarification_logs[-1])
-    assert payload["request_id"] == result.request_id
+    assert result.status == "completed"
+    trace_logs = [r for r in caplog.records if r.name == "chatops.decision_trace"]
+    payloads = [_parse_log_json(r) for r in trace_logs]
+    agent_response_payloads = [p for p in payloads if p.get("stage") == "agent_response"]
+    assert agent_response_payloads, "agent_response 단계 decision_trace 로그가 없습니다"
+    payload = agent_response_payloads[-1]
+    assert payload["request_id"] == 9902
     assert payload["session_id"] == 1002
     assert payload["user_id"] == "user-2"
-    assert payload["clarification_type"] == "ambiguity"
-    assert payload["fallback_used"] is False
-    assert payload["operation"] is None
-    assert payload["status_code"] is None
+    assert payload["decision"] == "text_response"
 
 
 def test_event_service_append_audit_event_includes_normalized_context(db_session) -> None:
@@ -334,44 +365,38 @@ def test_preview_request_logs_classification_trace(caplog) -> None:
     assert preview_payload["data"]["intent"] == "query_status"
 
 
-def test_handle_request_logs_plan_runtime_trace(caplog) -> None:
+def test_agent_tool_selection_logs_decision_trace(caplog) -> None:
+    """LLM이 도구를 선택하면 decision_trace stage='agent_tool_selected' 로그가 남는다."""
     caplog.set_level(logging.INFO, logger="chatops.decision_trace")
+
+    llm = FakeAgentLLMService(responses=[
+        # LLM이 도구 선택 → decision_trace 로그 기록
+        _tool_use_response("application__get_apps_logs", {}),
+        # 도구 결과 받고 요약
+        _text_response("앱 로그를 조회했습니다."),
+    ])
     graph_service = GraphService(
-        llm_service=_PlanningLLMService(),
-        registry_service=_CommandRegistryService(),
-        adapter_service=_FallbackDispatcher(),
-        resolver_service=ParameterResolverService(),
+        llm_service=llm,
+        registry_service=_FallbackRegistryService(),
+        downstream_dispatcher=_FallbackDispatcher(),
+        resolver_service=FakeAgentResolverService(),
     )
 
     result = graph_service.handle_request(
         session_id=1003,
         user_id="user-3",
-        message_text="demo 프로젝트에 애플리케이션 생성해",
+        message_text="demo 프로젝트에 앱 로그 보여줘",
+        request_id=9903,
     )
 
-    assert result.plan_object is not None
-    trace_logs = [record for record in caplog.records if record.name == "chatops.decision_trace"]
-    payloads = [_parse_log_json(record) for record in trace_logs]
-    plan_payload = next(payload for payload in payloads if payload["stage"] == "plan_runtime")
-    assert plan_payload["decision"] == "command"
-    assert plan_payload["request_id"] == result.request_id
-    assert plan_payload["session_id"] == 1003
-    assert plan_payload["user_id"] == "user-3"
-    assert plan_payload["data"]["goal"] == "demo 프로젝트에 앱 생성해"
-    assert plan_payload["data"]["specialist"] == "application"
-    assert plan_payload["data"]["risk_level"] == "medium"
-    assert plan_payload["data"]["required_clarifications"] == ["port"]
-    assert plan_payload["data"]["candidate_steps"] == [
-        {
-            "step_id": "create-app",
-            "title": "애플리케이션 생성",
-            "status": "planned",
-            "operation_id": "application.create_apps",
-        },
-        {
-            "step_id": "check-status",
-            "title": "생성 상태 확인",
-            "status": "planned",
-            "operation_id": "application.get_apps_status",
-        },
-    ]
+    assert result.status == "completed"
+    trace_logs = [r for r in caplog.records if r.name == "chatops.decision_trace"]
+    payloads = [_parse_log_json(r) for r in trace_logs]
+    tool_selected = [p for p in payloads if p.get("stage") == "agent_tool_selected"]
+    assert tool_selected, "agent_tool_selected 단계 decision_trace 로그가 없습니다"
+    payload = tool_selected[0]
+    assert payload["request_id"] == 9903
+    assert payload["session_id"] == 1003
+    assert payload["user_id"] == "user-3"
+    assert payload["decision"] == "tool_use"
+    assert payload["data"]["tool_name"] == "application__get_apps_logs"

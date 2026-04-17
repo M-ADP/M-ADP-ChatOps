@@ -110,43 +110,62 @@ class ScenarioRegistry(FakeRegistryService):
 
 
 def test_scenario_runner_scores_graph_cases_objectively() -> None:
-    dispatcher = RecordingDispatcher()
+    from tests.test_agent_loop import (
+        FakeAgentLLMService,
+        FakeAgentRegistryService,
+        FakeAgentDownstreamDispatcher,
+        FakeAgentResolverService,
+        _QUERY_ENTRY,
+        _text_response,
+        _tool_use_response,
+    )
+
+    dispatcher = FakeAgentDownstreamDispatcher(
+        execute_result={"summary": "조회 응답: 트래픽 정상", "success": True},
+    )
+    llm = FakeAgentLLMService(responses=[
+        _tool_use_response("monitoring__get_app_deployment_traffic", {
+            "project_name": "demo",
+            "application_name": "api-server",
+        }),
+        _text_response("조회 응답: 트래픽 정상"),
+        _text_response("어느 프로젝트의 어떤 앱인지 알려주세요."),
+    ])
+    registry = FakeAgentRegistryService(entries=[_QUERY_ENTRY])
     graph_service = GraphService(
-        llm_service=FakeLLMService(),
-        registry_service=ScenarioRegistry(),
-        adapter_service=dispatcher,
-        resolver_service=ParameterResolverService(),
+        llm_service=llm,
+        registry_service=registry,
+        downstream_dispatcher=dispatcher,
+        resolver_service=FakeAgentResolverService(),
     )
     runner = ScenarioRunner(
         graph_service=graph_service,
-        dispatch_count_getter=lambda: len(dispatcher.calls),
+        dispatch_count_getter=lambda: len(dispatcher.executed_operation_ids),
     )
 
-    report = runner.run(
-        [
-            ScenarioCase(
-                name="query success",
-                message_text="demo 프로젝트 api-server 앱 트래픽 상태 알려줘",
-                expectation=ScenarioExpectation(
-                    status="completed",
-                    request_type="query",
-                    dispatched=True,
-                    response_contains=("조회 응답",),
-                ),
+    report = runner.run([
+        ScenarioCase(
+            name="query success",
+            message_text="demo 프로젝트 api-server 앱 트래픽 상태 알려줘",
+            session_id=9001,
+            expectation=ScenarioExpectation(
+                status="completed",
+                request_type="agent",
+                dispatched=True,
+                response_contains=("조회 응답",),
             ),
-            ScenarioCase(
-                name="query missing inputs",
-                message_text="앱 상태 보여줘",
-                expectation=ScenarioExpectation(
-                    status="input_required",
-                    request_type="query",
-                    dispatched=False,
-                    missing_inputs=("project_name", "application_name"),
-                    response_contains=("어느 프로젝트의 어떤 앱인지",),
-                ),
+        ),
+        ScenarioCase(
+            name="query clarification",
+            message_text="앱 상태 보여줘",
+            session_id=9002,
+            expectation=ScenarioExpectation(
+                status="completed",
+                request_type="agent",
+                dispatched=False,
             ),
-        ]
-    )
+        ),
+    ])
 
     assert report.total_cases == 2
     assert report.passed_cases == 2

@@ -1,137 +1,78 @@
-"""멀티스텝 실행 로직 통합 테스트.
+"""멀티스텝 실행 로직 통합 테스트 (Agent Loop 기반).
 
-plan_object에 candidate_steps가 2개 이상일 때 advance_step 노드가 각 단계를
-순서대로 실행하고, 최종 respond_command / interpret_result가 집계된 결과를 반환하는지 검증한다.
+Agent Loop에서 LLM이 여러 도구를 순차적으로 호출하는 시나리오를 검증한다.
+requires_confirmation=False인 엔트리를 사용하여 승인 없이 순차 실행을 테스트한다.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from chatops.domain.enums import RequestStatus
 from chatops.graph.service import GraphService
-from chatops.services.registry import RegistryEntry, ScoredCandidate
-from tests.test_graph_service import FakeRegistryService, FakeResolverService
+from chatops.services.registry import RegistryEntry
+from tests.test_agent_loop import (
+    FakeAgentLLMService,
+    FakeAgentDownstreamDispatcher,
+    FakeAgentRegistryService,
+    FakeAgentResolverService,
+    _QUERY_ENTRY,
+    _text_response,
+    _tool_use_response,
+    _make_agent_service,
+)
 
 
 # ---------------------------------------------------------------------------
-# 멀티스텝 전용 Fake LLM
+# 승인 불필요(requires_confirmation=False) 명령 엔트리
 # ---------------------------------------------------------------------------
 
-@dataclass
-class MultiStepLLMService:
-    """command 요청에 대해 2단계 plan_object를 반환하는 fake LLM."""
-
-    def classify(self, message_text: str) -> dict[str, object]:
-        if "보여" in message_text or "목록" in message_text or "상태" in message_text:
-            return {
-                "request_type": "query",
-                "intent": "query_status",
-                "classification_reason": "조회 요청",
-                "classification_confidence": 0.95,
-            }
-        return {
-            "request_type": "command",
-            "intent": "execute_command",
-            "classification_reason": "멀티스텝 실행 요청",
-            "classification_confidence": 0.97,
-        }
-
-    def answer_inquiry(self, message_text: str, **kwargs: object) -> str:
-        return f"문의 응답: {message_text}"
-
-    def interpret_query_result(self, message_text: str, raw_result: dict[str, object]) -> str:
-        return f"조회 응답: {raw_result.get('summary', '')}"
-
-    def plan_command(self, message_text: str, operation_ids: list[str]) -> str:
-        return f"실행 계획: {operation_ids[0]}"
-
-    def build_plan_object(
-        self,
-        message_text: str,
-        request_type: str,
-        candidate_operation_ids: list[str],
-    ) -> dict[str, object]:
-        """2단계 계획을 반환한다. 두 단계 모두 project.create를 사용한다."""
-        return {
-            "goal": message_text,
-            "specialist": "project",
-            "entities": {},
-            "constraints": {"approval_required": True},
-            "candidate_steps": [
-                {
-                    "step_id": "step-0",
-                    "title": "1번째 프로젝트 생성",
-                    "status": "planned",
-                    "operation_id": "project.create",
-                },
-                {
-                    "step_id": "step-1",
-                    "title": "2번째 프로젝트 생성",
-                    "status": "planned",
-                    "operation_id": "project.create",
-                },
-            ],
-            "risk_level": "medium",
-            "required_clarifications": [],
-        }
-
-    def verify_execution(self, execution_result: dict[str, object], **kwargs: object) -> dict[str, object]:
-        return {
-            "decision": "success",
-            "summary": str(execution_result.get("summary", "성공")),
-            "missing_inputs": [],
-            "follow_up_action": "complete",
-        }
+_NO_CONFIRM_COMMAND_ENTRY = RegistryEntry(
+    id="project.create",
+    source_file="ai_registry/project.create.ai.yaml",
+    operation_id="create_project",
+    path="/projects",
+    method="POST",
+    summary="프로젝트 생성",
+    capability="프로젝트 생성",
+    usable_in=("command",),
+    operation_kind="write",
+    when_to_use=("프로젝트 생성",),
+    when_not_to_use=(),
+    requires_confirmation=False,  # 승인 불필요 — 멀티스텝 테스트용
+    risk_level="low",
+    side_effects=("프로젝트 생성",),
+    required_headers=("X-User-Id",),
+    required_inputs={"headers": [], "path": [], "query": [], "body": {"required": True, "required_fields": ["name"]}},
+    important_inputs={"path": [], "query": [], "body": ["name"]},
+)
 
 
-# ---------------------------------------------------------------------------
-# 멀티스텝 전용 Dispatcher — 실행 순서 추적
-# ---------------------------------------------------------------------------
-
-@dataclass
-class OrderedDispatcher:
-    executed_operations: list[str] = field(default_factory=list)
-
-    async def execute_command(
-        self,
-        operation,
-        user_id: str,
-        user_role: str | None = None,
-        org_id: str | None = None,
-        resolved_inputs: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        self.executed_operations.append(operation.id)
-        return {
-            "success": True,
-            "summary": f"{operation.id} 완료 (#{len(self.executed_operations)})",
-            "status_code": 200,
-        }
-
-    async def execute_query(
-        self,
-        operation,
-        user_id: str,
-        user_role: str | None = None,
-        org_id: str | None = None,
-        resolved_inputs: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        self.executed_operations.append(operation.id)
-        return {
-            "summary": f"{operation.id} 조회 완료 (#{len(self.executed_operations)})",
-            "status_code": 200,
-        }
-
-
-# ---------------------------------------------------------------------------
-# 헬퍼
-# ---------------------------------------------------------------------------
-
-def _build_service(dispatcher: OrderedDispatcher) -> GraphService:
+def _make_no_confirm_service(
+    llm: FakeAgentLLMService,
+    dispatcher: FakeAgentDownstreamDispatcher,
+) -> GraphService:
+    """승인 불필요 엔트리만 포함한 GraphService를 생성한다."""
+    registry = FakeAgentRegistryService(entries=[_NO_CONFIRM_COMMAND_ENTRY])
     return GraphService(
-        llm_service=MultiStepLLMService(),
-        registry_service=FakeRegistryService(),
+        llm_service=llm,
+        registry_service=registry,
         downstream_dispatcher=dispatcher,
-        resolver_service=FakeResolverService(),
+        resolver_service=FakeAgentResolverService(),
+        use_agent_loop=True,
+    )
+
+
+def _make_mixed_service(
+    llm: FakeAgentLLMService,
+    dispatcher: FakeAgentDownstreamDispatcher,
+) -> GraphService:
+    """승인 불필요 command + query 엔트리가 모두 포함된 GraphService를 생성한다."""
+    registry = FakeAgentRegistryService(entries=[_NO_CONFIRM_COMMAND_ENTRY, _QUERY_ENTRY])
+    return GraphService(
+        llm_service=llm,
+        registry_service=registry,
+        downstream_dispatcher=dispatcher,
+        resolver_service=FakeAgentResolverService(),
+        use_agent_loop=True,
     )
 
 
@@ -139,245 +80,107 @@ def _build_service(dispatcher: OrderedDispatcher) -> GraphService:
 # 테스트
 # ---------------------------------------------------------------------------
 
-def test_multistep_command_executes_all_steps_and_aggregates_response() -> None:
-    """2단계 command 플랜에서 두 단계가 모두 실행되고 집계 응답이 반환되어야 한다."""
-    dispatcher = OrderedDispatcher()
-    service = _build_service(dispatcher)
+def test_multistep_executes_all_tools_sequentially() -> None:
+    """LLM이 project.create를 두 번 순차 호출하면 dispatcher가 두 번 실행된다.
 
-    # 첫 요청: pending_approval 상태까지 진행
+    requires_confirmation=False이므로 승인 없이 바로 실행된다.
+    """
+    dispatcher = FakeAgentDownstreamDispatcher(
+        execute_result={"summary": "프로젝트 생성 완료", "success": True},
+    )
+    llm = FakeAgentLLMService(responses=[
+        # 1차: 첫 번째 프로젝트 생성
+        _tool_use_response("project__create", {"name": "proj-a"}),
+        # 2차: 두 번째 프로젝트 생성
+        _tool_use_response("project__create", {"name": "proj-b"}),
+        # 3차: 최종 요약
+        _text_response("2개 프로젝트(proj-a, proj-b)를 모두 생성했습니다."),
+    ])
+    service = _make_no_confirm_service(llm=llm, dispatcher=dispatcher)
+
     result = service.handle_request(
-        session_id=1,
+        session_id=7001,
         user_id="user-1",
         message_text="프로젝트 두 개 만들어줘",
     )
-    assert result.status == RequestStatus.PENDING_APPROVAL.value, f"expected pending_approval, got {result.status}"
-    request_id = result.request_id
 
-    # 승인 후 재개
-    result = service.resume_request(
-        request_id=request_id,
-        session_id=1,
-        user_id="user-1",
-        message_text="승인",
-        approval_granted=True,
+    assert len(dispatcher.executed_operation_ids) == 2
+    assert dispatcher.executed_operation_ids[0] == "project.create"
+    assert dispatcher.executed_operation_ids[1] == "project.create"
+    assert result.status == "completed"
+    assert "2" in result.final_response
+
+
+def test_multistep_selected_operation_ids_tracks_all_executions() -> None:
+    """멀티스텝 실행 시 selected_operation_ids에 모든 실행 operation_id가 기록된다."""
+    dispatcher = FakeAgentDownstreamDispatcher(
+        execute_result={"summary": "완료", "success": True},
     )
-
-    # 두 단계 모두 실행되었어야 함
-    assert len(dispatcher.executed_operations) == 2, (
-        f"2단계 실행 기대, 실제: {dispatcher.executed_operations}"
-    )
-    assert dispatcher.executed_operations[0] == "project.create"
-    assert dispatcher.executed_operations[1] == "project.create"
-
-    # 최종 응답에 "2개 작업" 집계 메시지가 포함되어야 함
-    assert result.status == RequestStatus.COMPLETED.value, f"expected completed, got {result.status}"
-    assert result.final_response is not None
-    assert "2" in result.final_response, f"집계 응답 없음: {result.final_response}"
-
-
-def test_multistep_completed_steps_in_state() -> None:
-    """completed_steps 필드에 각 단계의 결과가 기록되어야 한다."""
-    dispatcher = OrderedDispatcher()
-    service = _build_service(dispatcher)
+    llm = FakeAgentLLMService(responses=[
+        _tool_use_response("project__create", {"name": "proj-a"}),
+        _tool_use_response("project__create", {"name": "proj-b"}),
+        _text_response("2개 프로젝트를 생성했습니다."),
+    ])
+    service = _make_no_confirm_service(llm=llm, dispatcher=dispatcher)
 
     result = service.handle_request(
-        session_id=2,
-        user_id="user-2",
+        session_id=7002,
+        user_id="user-1",
         message_text="프로젝트 두 개 만들어줘",
     )
-    request_id = result.request_id
 
-    result = service.resume_request(
-        request_id=request_id,
-        session_id=2,
-        user_id="user-2",
-        message_text="승인",
-        approval_granted=True,
+    assert len(result.selected_operation_ids) == 2
+
+
+def test_single_tool_call_completes_without_aggregation() -> None:
+    """단일 도구 호출(requires_confirmation=False) → selected_operation_ids 길이 1, 정상 응답."""
+    dispatcher = FakeAgentDownstreamDispatcher(
+        execute_result={"summary": "프로젝트 생성 완료", "success": True},
     )
-
-    # plan_object가 포함되어 있어야 함
-    assert result.plan_object is not None
-    candidate_steps = result.plan_object.get("candidate_steps", [])
-    assert len(candidate_steps) == 2, f"plan_object에 2단계 기대, 실제: {candidate_steps}"
-
-
-def test_single_step_command_behaves_as_before() -> None:
-    """단일 단계(기존 동작)에서는 집계 메시지 없이 단일 응답이 반환되어야 한다."""
-    from tests.test_graph_service import FakeLLMService, FakeDownstreamDispatcher
-
-    dispatcher = FakeDownstreamDispatcher()
-    service = GraphService(
-        llm_service=FakeLLMService(),
-        registry_service=FakeRegistryService(),
-        downstream_dispatcher=dispatcher,
-        resolver_service=FakeResolverService(),
-    )
+    llm = FakeAgentLLMService(responses=[
+        _tool_use_response("project__create", {"name": "proj-single"}),
+        _text_response("proj-single 프로젝트를 생성했습니다."),
+    ])
+    service = _make_no_confirm_service(llm=llm, dispatcher=dispatcher)
 
     result = service.handle_request(
-        session_id=3,
-        user_id="user-3",
-        message_text="프로젝트 만들어줘",
-    )
-    request_id = result.request_id
-
-    result = service.resume_request(
-        request_id=request_id,
-        session_id=3,
-        user_id="user-3",
-        message_text="승인",
-        approval_granted=True,
+        session_id=7003,
+        user_id="user-1",
+        message_text="프로젝트 하나 만들어줘",
     )
 
-    assert result.status == RequestStatus.COMPLETED.value
-    # 단일 단계이므로 "N개 작업" 집계 메시지가 없어야 함
+    assert len(result.selected_operation_ids) == 1
+    assert result.status == "completed"
     assert result.final_response is not None
-    assert "개 작업을 모두 완료" not in result.final_response, (
-        f"단일 단계에서 집계 응답이 나와선 안 됨: {result.final_response}"
+
+
+def test_multistep_executes_in_llm_specified_order() -> None:
+    """LLM이 project.create → monitoring.get_app_deployment_traffic 순서로 호출하면
+    dispatcher.executed_operation_ids도 동일 순서여야 한다."""
+    dispatcher = FakeAgentDownstreamDispatcher(
+        execute_result={"summary": "완료", "success": True},
+    )
+    llm = FakeAgentLLMService(responses=[
+        # 1차: project.create
+        _tool_use_response("project__create", {"name": "proj-order"}),
+        # 2차: monitoring query
+        _tool_use_response("monitoring__get_app_deployment_traffic", {
+            "project_name": "proj-order",
+            "application_name": "web",
+        }),
+        # 3차: 최종 요약
+        _text_response("프로젝트 생성 후 트래픽을 조회했습니다."),
+    ])
+    service = _make_mixed_service(llm=llm, dispatcher=dispatcher)
+
+    result = service.handle_request(
+        session_id=7004,
+        user_id="user-1",
+        message_text="프로젝트 만들고 트래픽 조회해줘",
     )
 
-
-def test_multistep_command_uses_plan_step_order_even_when_registry_top_candidate_differs() -> None:
-    """연계 명령에서는 registry 1순위가 달라도 plan step 순서를 우선해야 한다."""
-
-    @dataclass
-    class OrderedPlanLLMService(MultiStepLLMService):
-        def build_plan_object(
-            self,
-            message_text: str,
-            request_type: str,
-            candidate_operation_ids: list[str],
-        ) -> dict[str, object]:
-            del candidate_operation_ids
-            return {
-                "goal": message_text,
-                "specialist": "project",
-                "entities": {},
-                "constraints": {"approval_required": True},
-                "candidate_steps": [
-                    {
-                        "step_id": "step-0",
-                        "title": "프로젝트 생성",
-                        "status": "planned",
-                        "operation_id": "project.create",
-                    },
-                    {
-                        "step_id": "step-1",
-                        "title": "애플리케이션 생성",
-                        "status": "planned",
-                        "operation_id": "application.create_apps",
-                    },
-                ],
-                "risk_level": "medium",
-                "required_clarifications": [],
-            }
-
-    @dataclass
-    class DivergingRegistry(FakeRegistryService):
-        def _command_entries(self) -> list[RegistryEntry]:
-            return [
-                RegistryEntry(
-                    id="project.create",
-                    source_file="ai_registry/project.create.ai.yaml",
-                    operation_id="create_project",
-                    path="/projects",
-                    method="POST",
-                    summary="프로젝트 생성",
-                    capability="프로젝트 생성",
-                    usable_in=("command",),
-                    operation_kind="write",
-                    when_to_use=("프로젝트 생성",),
-                    when_not_to_use=(),
-                    requires_confirmation=True,
-                    risk_level="medium",
-                    side_effects=("프로젝트 생성",),
-                    required_headers=("X-User-Id",),
-                    required_inputs={"headers": [], "path": [], "query": [], "body": {"required": True, "required_fields": ["name"]}},
-                    important_inputs={"path": [], "query": [], "body": ["name"]},
-                    preconditions=(),
-                    missing_info_questions=(),
-                    response_interpretation="생성 결과",
-                    plan_template=(),
-                    examples=(),
-                ),
-                RegistryEntry(
-                    id="application.create_apps",
-                    source_file="ai_registry/application.create_apps.ai.yaml",
-                    operation_id="create_apps",
-                    path="/apps",
-                    method="POST",
-                    summary="애플리케이션 생성",
-                    capability="애플리케이션 생성",
-                    usable_in=("command",),
-                    operation_kind="write",
-                    when_to_use=("애플리케이션 생성",),
-                    when_not_to_use=(),
-                    requires_confirmation=True,
-                    risk_level="medium",
-                    side_effects=("애플리케이션 생성",),
-                    required_headers=("X-User-Id",),
-                    required_inputs={
-                        "headers": [],
-                        "path": [],
-                        "query": [],
-                        "body": {"required": True, "required_fields": ["name", "cpu", "memory", "disk", "project_id"]},
-                    },
-                    important_inputs={"path": [], "query": [], "body": ["name", "cpu", "memory", "disk", "project_id"]},
-                    preconditions=(),
-                    missing_info_questions=(),
-                    response_interpretation="생성 결과",
-                    plan_template=(),
-                    examples=(),
-                ),
-            ]
-
-        def find_scored_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[ScoredCandidate]:
-            del user_text, limit
-            entries = self.find_candidates("ignored", usable_in, limit=5)
-            if usable_in != "command":
-                return [ScoredCandidate(entry=e, score=100 - i) for i, e in enumerate(entries)]
-            # 실제 문장에서는 app 키워드가 더 강해서 app가 1순위라고 가정
-            app_entry = next(e for e in entries if e.id == "application.create_apps")
-            project_entry = next(e for e in entries if e.id == "project.create")
-            return [
-                ScoredCandidate(entry=app_entry, score=100.0),
-                ScoredCandidate(entry=project_entry, score=95.0),
-            ]
-
-    @dataclass
-    class FullResolver:
-        def resolve(
-            self,
-            operation: RegistryEntry,
-            message_text: str,
-            session_context: dict[str, object] | None = None,
-        ) -> dict[str, object]:
-            del message_text, session_context
-            if operation.id == "project.create":
-                return {"body": {"name": "demo-project"}}
-            return {"body": {"name": "demo-app", "cpu": 1, "memory": 0.5, "disk": 10}}
-
-    dispatcher = OrderedDispatcher()
-    service = GraphService(
-        llm_service=OrderedPlanLLMService(),
-        registry_service=DivergingRegistry(),
-        downstream_dispatcher=dispatcher,
-        resolver_service=FullResolver(),
-    )
-
-    first = service.handle_request(
-        session_id=4,
-        user_id="user-4",
-        message_text="프로젝트 생성해. 그리고 애플리케이션 생성해.",
-    )
-    assert first.status == RequestStatus.PENDING_APPROVAL.value
-
-    final = service.resume_request(
-        request_id=first.request_id,
-        session_id=4,
-        user_id="user-4",
-        message_text="승인",
-        approval_granted=True,
-    )
-
-    assert final.status == RequestStatus.COMPLETED.value
-    assert dispatcher.executed_operations == ["project.create", "application.create_apps"]
+    assert dispatcher.executed_operation_ids == [
+        "project.create",
+        "monitoring.get_app_deployment_traffic",
+    ]
+    assert result.status == "completed"

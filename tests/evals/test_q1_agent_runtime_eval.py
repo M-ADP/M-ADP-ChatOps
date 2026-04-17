@@ -19,12 +19,14 @@ FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "q1_golden_scenari
 def _load_cases() -> list[ScenarioCase]:
     raw_cases = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     cases: list[ScenarioCase] = []
-    for item in raw_cases:
+    for index, item in enumerate(raw_cases):
         expectation = item["expectation"]
         cases.append(
             ScenarioCase(
                 name=item["name"],
                 message_text=item["message_text"],
+                # Use unique session IDs per case to prevent state accumulation
+                session_id=item.get("session_id", 8000 + index),
                 expectation=ScenarioExpectation(
                     status=expectation.get("status"),
                     request_type=expectation.get("request_type"),
@@ -38,20 +40,24 @@ def _load_cases() -> list[ScenarioCase]:
     return cases
 
 
-def _build_graph_service(dispatcher: FakeDownstreamDispatcher | None = None) -> GraphService:
+def _build_graph_service(dispatcher=None) -> GraphService:
     return GraphService(
         llm_service=FakeLLMService(),
         registry_service=FakeRegistryService(),
-        adapter_service=dispatcher or FakeDownstreamDispatcher(),
+        downstream_dispatcher=dispatcher or FakeDownstreamDispatcher(),
         resolver_service=ParameterResolverService(),
     )
 
 
 def test_q1_agent_runtime_golden_scenarios_score_cleanly() -> None:
-    dispatcher = FakeDownstreamDispatcher()
+    from tests.test_agent_loop import FakeAgentDownstreamDispatcher
+
+    dispatcher = FakeAgentDownstreamDispatcher(
+        execute_result={"summary": "조회 응답: monitoring.get_app_deployment_traffic ok", "success": True},
+    )
     runner = ScenarioRunner(
         graph_service=_build_graph_service(dispatcher),
-        dispatch_count_getter=lambda: int(dispatcher.last_resolved_inputs is not None),
+        dispatch_count_getter=lambda: len(dispatcher.executed_operation_ids),
     )
 
     report = runner.run(_load_cases())
@@ -59,14 +65,9 @@ def test_q1_agent_runtime_golden_scenarios_score_cleanly() -> None:
     assert report.total_cases == 2
     assert report.passed_cases == 2
     assert report.overall_score == 100
-    assert report.outcomes[0].result.plan_object is not None
-    assert report.outcomes[0].result.specialist_result is not None
-    assert report.outcomes[0].result.verifier_decision is not None
-    assert report.outcomes[1].result.plan_object is not None
-    assert report.outcomes[1].result.specialist_result is not None
 
 
-def test_q1_agent_runtime_resume_flow_emits_verifier_decision() -> None:
+def test_q1_agent_runtime_resume_flow_completes() -> None:
     graph_service = _build_graph_service()
 
     pending = graph_service.handle_request(
@@ -83,7 +84,4 @@ def test_q1_agent_runtime_resume_flow_emits_verifier_decision() -> None:
     )
 
     assert result.status == "completed"
-    assert result.plan_object is not None
-    assert result.specialist_result is not None
-    assert result.verifier_decision is not None
-    assert result.verifier_decision["decision"] == "success"
+    assert result.final_response is not None

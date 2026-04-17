@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from chatops.evaluation.harness import ScenarioRunner, load_quality_scenarios
 from chatops.graph.service import GraphService
@@ -355,19 +356,25 @@ class QualityRegistry:
     def get_entry(self, entry_id: str):
         return ENTRIES.get(entry_id)
 
+    def all_enabled_entries(self) -> list:
+        return list(ENTRIES.values())
+
 
 @dataclass
 class QualityDispatcher:
     calls: list[str] = field(default_factory=list)
+    executed_operation_ids: list[str] = field(default_factory=list)
 
     async def execute_query(self, operation, user_id: str, user_role=None, org_id=None, resolved_inputs=None):
         del user_id, user_role, org_id, resolved_inputs
         self.calls.append(operation.id)
+        self.executed_operation_ids.append(operation.id)
         return {"summary": f"{operation.id} ok"}
 
     async def execute_command(self, operation, user_id: str, user_role=None, org_id=None, resolved_inputs=None):
         del user_id, user_role, org_id, resolved_inputs
         self.calls.append(operation.id)
+        self.executed_operation_ids.append(operation.id)
         return {"success": True, "summary": f"{operation.id} ok", "result": {}}
 
 
@@ -391,18 +398,105 @@ class GroundedFakeLLMService(FakeLLMService):
             return "현재 지원하지 않는 기능입니다. 지원되는 프로젝트, 앱, 모니터링 조회 및 변경 작업만 요청할 수 있습니다."
         return super().answer_inquiry(message_text)
 
+    def converse_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        system_prompt: str,
+        tool_specs: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        from tests.test_graph_service import _text_response, _tool_use_response
+
+        # Extract first user message text (for vague pattern detection)
+        text = ""
+        for msg in messages:
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                content = msg.get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and "text" in block:
+                            text = str(block["text"])
+                            break
+                elif isinstance(content, str):
+                    text = content
+                break
+            elif hasattr(msg, "type") and msg.type == "human":
+                content = msg.content
+                if isinstance(content, str):
+                    text = content
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and "text" in block:
+                            text = str(block["text"])
+                            break
+                break
+
+        # Check if last message is tool_result → return summary
+        last = messages[-1] if messages else None
+        if last is not None:
+            last_content = last.get("content", []) if isinstance(last, dict) else getattr(last, "content", [])
+            if not isinstance(last_content, list):
+                last_content = []
+            for block in last_content:
+                if isinstance(block, dict) and "toolResult" in block:
+                    result_content = block["toolResult"].get("content", [])
+                    summary = ""
+                    for c in result_content:
+                        if isinstance(c, dict) and "json" in c:
+                            json_result = c["json"]
+                            summary = json_result.get("summary", str(json_result))
+                    return {
+                        "stop_reason": "end_turn",
+                        "assistant_message": {"role": "assistant", "content": [{"text": f"조회 응답: {summary}"}]},
+                        "tool_calls": [],
+                        "text_content": f"조회 응답: {summary}",
+                    }
+
+        # Vague messages without specific identifiers → ask for clarification (dispatched=False)
+        # Only match when the message is EXACTLY the vague pattern (no project/app qualifiers)
+        stripped = text.strip()
+        vague_patterns = ["앱 상태 보여줘", "demo 상태 보여줘"]
+        if any(stripped == p for p in vague_patterns):
+            return {
+                "stop_reason": "end_turn",
+                "assistant_message": {"role": "assistant", "content": [{"text": "어느 프로젝트의 어떤 앱인지 알려주세요."}]},
+                "tool_calls": [],
+                "text_content": "어느 프로젝트의 어떤 앱인지 알려주세요.",
+            }
+
+        # Inquiry: "방법", "알려줘", "설명", "백업"
+        if any(kw in text for kw in ("방법", "알려줘", "설명")):
+            return {
+                "stop_reason": "end_turn",
+                "assistant_message": {"role": "assistant", "content": [{"text": f"문의 응답: {text}"}]},
+                "tool_calls": [],
+                "text_content": f"문의 응답: {text}",
+            }
+
+        # Missing required values for command → return clarification text (dispatched=False)
+        # "프로젝트 하나 만들어줘" without complete parameters
+        if "만들어줘" in text and not any(kw in text for kw in ("name=", "이름은", "cpu", "memory", "disk", "max_cpu")):
+            return {
+                "stop_reason": "end_turn",
+                "assistant_message": {"role": "assistant", "content": [{"text": "프로젝트 이름, CPU, 메모리, 디스크 정보를 알려주세요."}]},
+                "tool_calls": [],
+                "text_content": "프로젝트 이름, CPU, 메모리, 디스크 정보를 알려주세요.",
+            }
+
+        # Fall back to parent for all other cases
+        return super().converse_with_tools(messages, system_prompt, tool_specs)
+
 
 def test_quality_baseline_suite_scores_at_least_80() -> None:
     dispatcher = QualityDispatcher()
     graph_service = GraphService(
         llm_service=GroundedFakeLLMService(),
         registry_service=QualityRegistry(),
-        adapter_service=dispatcher,
+        downstream_dispatcher=dispatcher,
         resolver_service=ParameterResolverService(),
     )
     runner = ScenarioRunner(
         graph_service=graph_service,
-        dispatch_count_getter=lambda: len(dispatcher.calls),
+        dispatch_count_getter=lambda: len(dispatcher.executed_operation_ids),
     )
 
     report = runner.run(load_quality_scenarios())
