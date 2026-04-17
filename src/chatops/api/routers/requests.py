@@ -342,7 +342,7 @@ def _supersede_pending_request(record: RequestRecord, replacement_request_id: in
 
 def _check_ttl(record: RequestRecord) -> None:
     """P0: 승인 TTL 만료 확인. 만료 시 상태 전이 없이 예외 발생."""
-    if record.status != RequestStatus.PENDING_APPROVAL.value:
+    if record.status not in (RequestStatus.PENDING_APPROVAL.value, "interrupted"):
         return
     app_config = get_app_config()
     ttl_seconds = app_config.approval_ttl_seconds
@@ -527,7 +527,7 @@ def _append_request_resolution_events(
             synthetic=True,
         )
 
-    if record.status == RequestStatus.PENDING_APPROVAL.value:
+    if record.status in (RequestStatus.PENDING_APPROVAL.value, "interrupted"):
         _append_structured_event(
             event_service,
             request_id=record.id,
@@ -932,8 +932,8 @@ def create_request(
         session_summary=session_summary,
     )
 
-    # 자연어 승인/거절: 이전 요청이 pending_approval이면 intent 감지
-    if previous_request is not None and previous_request.status == "pending_approval":
+    # 자연어 승인/거절: 이전 요청이 pending_approval 또는 interrupted(Agent Loop)이면 intent 감지
+    if previous_request is not None and previous_request.status in ("pending_approval", "interrupted"):
         # P0: TTL 만료 확인
         try:
             _check_ttl(previous_request)
@@ -1487,7 +1487,7 @@ def reject_request(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     record = _load_request_or_404(db_session, request_id=request_id, user_id=auth.user_id)
-    if record.status != "pending_approval":
+    if record.status not in ("pending_approval", "interrupted"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Request is not pending approval")
 
     graph_result = graph_service.resume_request(
