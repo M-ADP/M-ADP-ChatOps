@@ -724,6 +724,33 @@ class WorkflowNodes:
             # 다음 단계 준비
             next_step = candidate_steps[next_index]
             next_operation_id = str(next_step.get("operation_id") or "")
+
+            # 현재 단계에서 resolve된 references를 session_context에 carry over
+            # → 다음 단계 resolver가 마커 없이 프로젝트/앱 이름을 이어받음
+            current_refs = (state.get("resolved_inputs") or {}).get("references") or {}
+            current_ids = state.get("resolved_ids") or {}
+            session_context: dict[str, Any] = dict(state.get("session_context") or {})
+            carry: dict[str, Any] = dict(session_context.get("multistep_carry_references") or {})
+            for ref_key in ("project_name", "application_name", "target_nickname"):
+                if current_refs.get(ref_key):
+                    carry[ref_key] = current_refs[ref_key]
+            if current_ids.get("project_id") is not None and "project_name" in carry:
+                entity_memory: dict[str, Any] = dict(session_context.get("entity_memory") or {})
+                projects = list(entity_memory.get("projects") or [])
+                existing = next(
+                    (p for p in projects if p.get("canonical_name") == carry["project_name"]),
+                    None,
+                )
+                if existing is None:
+                    projects.append({
+                        "canonical_name": carry["project_name"],
+                        "aliases": [carry["project_name"]],
+                        "resolved_id": current_ids["project_id"],
+                    })
+                    entity_memory = {**entity_memory, "projects": projects}
+                    session_context = {**session_context, "entity_memory": entity_memory}
+            session_context = {**session_context, "multistep_carry_references": carry}
+
             return {
                 "current_step_index": next_index,
                 "completed_steps": completed_steps,
@@ -733,6 +760,7 @@ class WorkflowNodes:
                 "query_result": None,
                 "verifier_route": None,
                 "retry_count": 0,
+                "session_context": session_context,
             }
 
         # 모든 단계 완료

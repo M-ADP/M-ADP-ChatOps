@@ -229,6 +229,10 @@ class RegistryService:
             return True, [top, second]
         return False, []
 
+    def all_enabled_entries(self) -> list[RegistryEntry]:
+        """활성화된 모든 엔트리를 반환한다 (Agent Loop 도구 스키마 생성용)."""
+        return [entry for entry in self.entries if entry.enabled]
+
     def get_entry(self, entry_id: str | None) -> RegistryEntry | None:
         if not entry_id:
             return None

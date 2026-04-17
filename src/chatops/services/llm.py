@@ -212,6 +212,165 @@ class BedrockLLMService:
         except (json.JSONDecodeError, ValueError, TypeError, Exception):
             return self._fallback_verifier_decision(execution_result)
 
+    # ──────────────────────────────────────────────────
+    # Agent Loop: Converse API with tool_use support
+    # ──────────────────────────────────────────────────
+
+    def converse_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        system_prompt: str,
+        tool_specs: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Bedrock Converse API를 tool 정의와 함께 호출한다.
+
+        Returns:
+            {
+                "stop_reason": "end_turn" | "tool_use",
+                "assistant_message": dict,  # messages에 추가할 assistant 메시지
+                "tool_calls": [{"tool_use_id": str, "name": str, "input": dict}],
+                "text_content": str | None,
+            }
+        """
+        kwargs: dict[str, Any] = {
+            "modelId": self.model_id,
+            "system": [{"text": system_prompt}],
+            "messages": messages,
+            "inferenceConfig": self._inference_config(),
+        }
+        if tool_specs:
+            kwargs["toolConfig"] = {"tools": tool_specs}
+
+        body = self.client.converse(**kwargs)
+        return self._parse_converse_tool_response(body)
+
+    def converse_with_tools_stream(
+        self,
+        messages: list[dict[str, Any]],
+        system_prompt: str,
+        tool_specs: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """스트리밍 버전. 텍스트 청크는 stream_handler로 전달된다."""
+        stream_handler = get_response_stream_handler()
+        kwargs: dict[str, Any] = {
+            "modelId": self.model_id,
+            "system": [{"text": system_prompt}],
+            "messages": messages,
+            "inferenceConfig": self._inference_config(),
+        }
+        if tool_specs:
+            kwargs["toolConfig"] = {"tools": tool_specs}
+
+        response = self.client.converse_stream(**kwargs)
+
+        # 스트림에서 content blocks를 조립
+        text_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+        current_tool_use: dict[str, Any] | None = None
+        current_tool_input_json = ""
+        stop_reason = "end_turn"
+
+        for chunk in response["stream"]:
+            # 텍스트 델타
+            delta = chunk.get("contentBlockDelta")
+            if isinstance(delta, dict):
+                payload = delta.get("delta", {})
+                text = payload.get("text")
+                if isinstance(text, str) and text:
+                    text_parts.append(text)
+                    if stream_handler is not None:
+                        stream_handler(text)
+                tool_input = payload.get("toolUse", {}).get("input")
+                if isinstance(tool_input, str):
+                    current_tool_input_json += tool_input
+
+            # content block 시작
+            start = chunk.get("contentBlockStart")
+            if isinstance(start, dict):
+                tool_use_start = start.get("start", {}).get("toolUse")
+                if isinstance(tool_use_start, dict):
+                    current_tool_use = {
+                        "tool_use_id": tool_use_start.get("toolUseId", ""),
+                        "name": tool_use_start.get("name", ""),
+                    }
+                    current_tool_input_json = ""
+
+            # content block 종료
+            stop = chunk.get("contentBlockStop")
+            if isinstance(stop, dict) and current_tool_use is not None:
+                parsed_input = {}
+                if current_tool_input_json:
+                    try:
+                        parsed_input = json.loads(current_tool_input_json)
+                    except (json.JSONDecodeError, TypeError):
+                        parsed_input = {}
+                tool_calls.append({**current_tool_use, "input": parsed_input})
+                current_tool_use = None
+                current_tool_input_json = ""
+
+            # 메시지 종료
+            message_stop = chunk.get("messageStop")
+            if isinstance(message_stop, dict):
+                stop_reason = message_stop.get("stopReason", "end_turn")
+
+        # assistant 메시지 조립
+        content_blocks: list[dict[str, Any]] = []
+        combined_text = "".join(text_parts).strip()
+        if combined_text:
+            content_blocks.append({"text": combined_text})
+        for tc in tool_calls:
+            content_blocks.append({
+                "toolUse": {
+                    "toolUseId": tc["tool_use_id"],
+                    "name": tc["name"],
+                    "input": tc["input"],
+                }
+            })
+
+        return {
+            "stop_reason": stop_reason,
+            "assistant_message": {
+                "role": "assistant",
+                "content": content_blocks,
+            },
+            "tool_calls": tool_calls,
+            "text_content": combined_text or None,
+        }
+
+    def _parse_converse_tool_response(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Bedrock Converse 응답에서 tool_use와 텍스트를 추출한다."""
+        output = body.get("output", {})
+        message = output.get("message", {})
+        content = message.get("content", [])
+        stop_reason = body.get("stopReason", "end_turn")
+
+        text_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if "text" in block:
+                text_parts.append(str(block["text"]))
+            tool_use = block.get("toolUse")
+            if isinstance(tool_use, dict):
+                tool_calls.append({
+                    "tool_use_id": str(tool_use.get("toolUseId", "")),
+                    "name": str(tool_use.get("name", "")),
+                    "input": tool_use.get("input", {}),
+                })
+
+        combined_text = "\n".join(text_parts).strip()
+        return {
+            "stop_reason": stop_reason,
+            "assistant_message": {
+                "role": "assistant",
+                "content": content,
+            },
+            "tool_calls": tool_calls,
+            "text_content": combined_text or None,
+        }
+
     def _model_text_response(self, *, system_prompt: str, user_prompt: str) -> str:
         if get_response_stream_handler() is not None:
             return self._streaming_text_response(

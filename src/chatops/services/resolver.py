@@ -357,6 +357,13 @@ class ParameterResolverService:
 
         self._apply_entity_memory(message_text, references, session_context)
 
+        # 멀티스텝: 이전 단계에서 resolve된 references를 마커 없이 무조건 적용
+        multistep_refs = session_context.get("multistep_carry_references")
+        if isinstance(multistep_refs, dict):
+            for key in ("project_name", "application_name", "target_nickname"):
+                if key not in references and multistep_refs.get(key):
+                    references[key] = multistep_refs[key]
+
         # Entity memory: 이전 요청의 resolved references에서 엔티티를 가져옴
         last_refs = session_context.get("last_resolved_references")
         if isinstance(last_refs, dict) and self._should_use_entity_memory(message_text):
@@ -685,6 +692,13 @@ class ParameterResolverService:
         pairs: dict[str, Any],
         references: dict[str, Any],
     ) -> None:
+        # follow-up rewrite가 project_name=jojaemin 형식으로 pairs에 넣은 값을
+        # references로 승격시킨다. _extract_references의 정규식은 자연어 패턴만
+        # 인식하므로 key=value 형식은 여기서 처리해야 한다.
+        for ref_key in ("project_name", "application_name", "target_nickname"):
+            if ref_key not in references and ref_key in pairs:
+                references[ref_key] = pairs[ref_key]
+
         operation_id = operation.id
         if operation_id == "project.create" and "name" not in pairs and "project_name" in references:
             pairs["name"] = references["project_name"]

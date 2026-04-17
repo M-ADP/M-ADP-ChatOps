@@ -4,14 +4,11 @@ import atexit
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Any, Callable
 
 from chatops.common.id_generator import IdGenerator
-from chatops.domain.enums import RequestStatus
-from chatops.graph.nodes import WorkflowNodes
+from chatops.graph.agent_loop import AgentGraph
 from chatops.graph.session_message_service import SessionMessageService
-from chatops.graph.state import GraphState
-from chatops.graph.workflow import GraphWorkflow
 from chatops.services.decision_trace import log_decision_trace
 from chatops.services.response_streaming import response_stream_handler_context
 from langgraph.checkpoint.memory import InMemorySaver
@@ -52,32 +49,35 @@ class GraphResult:
 class GraphService:
     def __init__(
         self,
-        llm_service,
-        registry_service,
-        adapter_service=None,
-        downstream_dispatcher=None,
-        resolver_service=None,
-        checkpointer=None,
+        llm_service: Any,
+        registry_service: Any,
+        adapter_service: Any = None,
+        downstream_dispatcher: Any = None,
+        resolver_service: Any = None,
+        checkpointer: Any = None,
         database_url: str | None = None,
         approval_ttl_seconds: int = 900,
+        # 하위 호환: use_agent_loop 파라미터를 받되 무시한다.
+        use_agent_loop: bool = True,
     ) -> None:
         self._exit_stack = ExitStack()
         self._closed = False
         self.approval_ttl_seconds = approval_ttl_seconds
+        self.llm_service = llm_service
         self.checkpointer = checkpointer or self._build_checkpointer(database_url)
+
         dispatcher = downstream_dispatcher or adapter_service
         if dispatcher is None:
             raise ValueError("downstream dispatcher is required")
-        self.nodes = WorkflowNodes(
+
+        agent_graph = AgentGraph(
             llm_service=llm_service,
             registry_service=registry_service,
             downstream_dispatcher=dispatcher,
             resolver_service=resolver_service or _NullResolverService(),
             approval_ttl_seconds=approval_ttl_seconds,
         )
-        self.workflow = GraphWorkflow(
-            self.nodes
-        ).compile(checkpointer=self.checkpointer)
+        self.workflow = agent_graph.compile(checkpointer=self.checkpointer)
         atexit.register(self.close)
 
     def preview_request(
@@ -91,7 +91,7 @@ class GraphService:
                 "session_context": session_context,
             }
         )
-        classification = self.nodes.llm_service.classify(effective_message_text)
+        classification = self.llm_service.classify(effective_message_text)
         log_decision_trace(
             stage="preview_request",
             decision=str(classification["request_type"]),
@@ -119,24 +119,39 @@ class GraphService:
         request_id: int | None = None,
         response_stream_handler: Callable[[str], None] | None = None,
     ) -> GraphResult:
+        from chatops.graph.agent_state import AgentState
+
         request_id = request_id or IdGenerator.generate_sonyflake_id()
-        initial_state: GraphState = {
+        now = datetime.now(timezone.utc).isoformat()
+
+        initial_state: AgentState = {
             "request_id": request_id,
             "session_id": session_id,
             "user_id": user_id,
             "user_role": user_role,
             "org_id": org_id,
-            "message_text": message_text,
+            # messages는 add_messages reducer로 누적된다.
+            # 동일 session_id의 이전 대화 내용이 있으면 자동으로 이어진다.
+            "messages": [
+                {"role": "user", "content": [{"text": message_text}]},
+            ],
             "session_context": session_context,
             "approval_granted": False,
-            "request_status": "created",
-            "selected_operation_ids": [],
-            "requires_approval": False,
-            "is_ambiguous": False,
-            "ambiguity_candidates": [],
+            "request_status": "processing",
+            "executed_operations": [],
+            "pending_tool_call": None,
+            "created_at": now,
         }
+        # session_id를 thread_id로 사용 → 같은 세션의 메시지 히스토리가 누적된다.
+        config = self._session_config(session_id)
         with response_stream_handler_context(response_stream_handler):
-            return self._invoke(initial_state, config=self._thread_config(request_id))
+            result = self.workflow.invoke(initial_state, config=config)
+
+        return self._build_agent_result(
+            result=result,
+            config=config,
+            initial_state=initial_state,
+        )
 
     def resume_request(
         self,
@@ -149,81 +164,65 @@ class GraphService:
         org_id: str | None = None,
         response_stream_handler: Callable[[str], None] | None = None,
     ) -> GraphResult:
-        fallback_state: GraphState = {
+        fallback_state = {
             "request_id": request_id,
             "session_id": session_id,
             "user_id": user_id,
             "user_role": user_role,
             "org_id": org_id,
-            "message_text": message_text,
-            "approval_granted": approval_granted,
         }
-        config = self._thread_config(request_id)
+        # handle_request와 동일한 session_id 기반 thread_id 사용
+        config = self._session_config(session_id)
         with response_stream_handler_context(response_stream_handler):
             result = self.workflow.invoke(Command(resume=approval_granted), config=config)
-        return self._build_result(result=result, config=config, fallback_state=fallback_state)
 
-    def _invoke(self, initial_state: GraphState, config: dict[str, object]) -> GraphResult:
-        result = self.workflow.invoke(initial_state, config=config)
-        return self._build_result(result=result, config=config, fallback_state=initial_state)
+        return self._build_agent_result(
+            result=result,
+            config=config,
+            initial_state=fallback_state,
+        )
 
-    def _build_result(
+    def _build_agent_result(
         self,
         result: dict[str, object],
         config: dict[str, object],
-        fallback_state: GraphState,
+        initial_state: dict[str, object],
     ) -> GraphResult:
         snapshot = self.workflow.get_state(config)
-        state = dict(fallback_state)
+        state: dict[str, Any] = dict(initial_state)
         state.update(snapshot.values)
-        state.update({key: value for key, value in result.items() if key != "__interrupt__"})
+        state.update({k: v for k, v in result.items() if k != "__interrupt__"})
+
+        # interrupt()가 발생한 경우 승인 대기 상태로 표시
+        is_interrupted = "__interrupt__" in result
+        if is_interrupted:
+            status = "interrupted"
+            requires_approval = True
+        else:
+            status = str(state.get("request_status", "created"))
+            requires_approval = False
+
         return GraphResult(
             request_id=int(state["request_id"]),
             session_id=int(state["session_id"]),
             user_id=str(state["user_id"]),
-            status=str(state.get("request_status", "created")),
-            request_type=str(state.get("request_type", "")),
-            requires_approval=bool(state.get("requires_approval", False)),
-            intent=str(state.get("intent", "")),
+            status=status,
+            request_type="agent",
+            requires_approval=requires_approval,
+            intent="",
             final_response=state.get("final_response"),
-            selected_operation_ids=list(state.get("selected_operation_ids", [])),
-            missing_inputs=list(state.get("missing_inputs", [])) or None,
-            effective_message_text=state.get("effective_message_text"),
-            resolved_references=self._extract_references(state),
-            resolved_ids=self._extract_resolved_ids(state),
-            is_ambiguous=bool(state.get("is_ambiguous", False)),
-            ambiguity_candidates=state.get("ambiguity_candidates"),
-            risk_level=state.get("risk_level"),
-            error_code=state.get("error_code"),
-            expires_at=state.get("expires_at"),
-            clarification_type=state.get("clarification_type"),
-            fallback_used=bool(state.get("fallback_used", False)),
+            selected_operation_ids=[
+                op["operation_id"]
+                for op in (state.get("executed_operations") or [])
+                if isinstance(op, dict) and op.get("operation_id")
+            ],
             execution_audit=state.get("execution_audit"),
             task_snapshot=state.get("task_snapshot"),
-            plan_object=state.get("plan_object"),
-            verifier_decision=state.get("verifier_decision"),
-            specialist_result=state.get("specialist_result"),
-            session_summary=state.get("session_summary"),
         )
 
-    def _extract_references(self, state: dict[str, object]) -> dict[str, object] | None:
-        resolved_inputs = state.get("resolved_inputs")
-        if isinstance(resolved_inputs, dict):
-            refs = resolved_inputs.get("references")
-            if isinstance(refs, dict) and refs:
-                return dict(refs)
-        return None
-
-    def _extract_resolved_ids(self, state: dict[str, object]) -> dict[str, object] | None:
-        resolved_inputs = state.get("resolved_inputs")
-        if isinstance(resolved_inputs, dict):
-            resolved_ids = resolved_inputs.get("resolved_ids")
-            if isinstance(resolved_ids, dict) and resolved_ids:
-                return dict(resolved_ids)
-        return None
-
-    def _thread_config(self, request_id: int) -> dict[str, object]:
-        return {"configurable": {"thread_id": str(request_id)}}
+    def _session_config(self, session_id: int) -> dict[str, object]:
+        """세션 기반 thread 설정. 동일 session_id는 대화 히스토리를 공유한다."""
+        return {"configurable": {"thread_id": f"sess_{session_id}"}}
 
     def _build_checkpointer(self, database_url: str | None):
         if database_url and database_url.startswith("postgresql"):
