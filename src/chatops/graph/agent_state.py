@@ -7,7 +7,15 @@ from __future__ import annotations
 
 from typing import Annotated, Any, TypedDict
 
-from langgraph.graph import add_messages
+
+def _append_messages(left: list | None, right: list | None) -> list:
+    """Bedrock dict 형태를 유지하는 메시지 누적 reducer.
+
+    LangGraph의 add_messages는 dict를 LangChain HumanMessage 등으로 변환하여
+    boto3 Bedrock API 호출 시 ParamValidationError를 유발한다.
+    이 reducer는 단순 append로 dict 형태를 보존한다.
+    """
+    return (left or []) + list(right or [])
 
 
 class AgentState(TypedDict, total=False):
@@ -20,7 +28,7 @@ class AgentState(TypedDict, total=False):
 
     # 메시지 히스토리 — Agent Loop의 핵심.
     # system + user + assistant(tool_use) + user(tool_result) 메시지가 누적된다.
-    messages: Annotated[list, add_messages]
+    messages: Annotated[list, _append_messages]
 
     # 세션 컨텍스트 (엔티티 메모리, 후속 참조)
     session_context: dict[str, Any] | None

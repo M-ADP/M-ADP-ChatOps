@@ -130,7 +130,7 @@ class GraphService:
             "user_id": user_id,
             "user_role": user_role,
             "org_id": org_id,
-            # messages는 add_messages reducer로 누적된다.
+            # messages는 _append_messages reducer로 누적된다 (Bedrock dict 형태 유지).
             # 동일 session_id의 이전 대화 내용이 있으면 자동으로 이어진다.
             "messages": [
                 {"role": "user", "content": [{"text": message_text}]},
