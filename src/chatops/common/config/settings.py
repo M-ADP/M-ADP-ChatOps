@@ -134,6 +134,10 @@ class BedrockConfig(LoggedSettings):
 
     model_id: str = "amazon.nova-2-lite-v1:0"
     region: str = "us-east-1"
+    # Guardrails: 설정 시 promptAttack 필터 활성화. 미설정 시 비활성화.
+    # 환경변수: BEDROCK_GUARDRAIL_ID, BEDROCK_GUARDRAIL_VERSION
+    guardrail_id: str | None = None
+    guardrail_version: str = "DRAFT"
 
 
 class SonyflakeConfig(LoggedSettings):

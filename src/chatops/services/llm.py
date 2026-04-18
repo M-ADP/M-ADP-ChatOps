@@ -74,11 +74,15 @@ class BedrockLLMService:
         timeout_seconds: int,
         client: Any,
         max_tokens: int = 1024,
+        guardrail_id: str | None = None,
+        guardrail_version: str = "DRAFT",
     ) -> None:
         self.model_id = model_id
         self.timeout_seconds = timeout_seconds
         self.client = client
         self.max_tokens = max_tokens
+        self.guardrail_id = guardrail_id
+        self.guardrail_version = guardrail_version
 
     def classify(self, message_text: str) -> dict[str, Any]:
         try:
@@ -216,6 +220,18 @@ class BedrockLLMService:
     # Agent Loop: Converse API with tool_use support
     # ──────────────────────────────────────────────────
 
+    def _guardrail_kwargs(self) -> dict[str, Any]:
+        """Bedrock Guardrails 설정이 있을 때만 kwargs를 반환한다.
+
+        BEDROCK_GUARDRAIL_ID 환경변수가 설정되면 promptAttack 필터가 활성화된다.
+        """
+        if not self.guardrail_id:
+            return {}
+        return {
+            "guardrailIdentifier": self.guardrail_id,
+            "guardrailVersion": self.guardrail_version,
+        }
+
     def converse_with_tools(
         self,
         messages: list[dict[str, Any]],
@@ -237,6 +253,7 @@ class BedrockLLMService:
             "system": [{"text": system_prompt}],
             "messages": messages,
             "inferenceConfig": self._inference_config(),
+            **self._guardrail_kwargs(),
         }
         if tool_specs:
             kwargs["toolConfig"] = {"tools": tool_specs}
@@ -257,6 +274,7 @@ class BedrockLLMService:
             "system": [{"text": system_prompt}],
             "messages": messages,
             "inferenceConfig": self._inference_config(),
+            **self._guardrail_kwargs(),
         }
         if tool_specs:
             kwargs["toolConfig"] = {"tools": tool_specs}
@@ -388,6 +406,7 @@ class BedrockLLMService:
             system=[{"text": system_prompt}],
             messages=[{"role": "user", "content": [{"text": user_prompt}]}],
             inferenceConfig=self._inference_config(),
+            **self._guardrail_kwargs(),
         )
         return self._extract_text(body).strip()
 
@@ -398,6 +417,7 @@ class BedrockLLMService:
             system=[{"text": system_prompt}],
             messages=[{"role": "user", "content": [{"text": user_prompt}]}],
             inferenceConfig=self._inference_config(),
+            **self._guardrail_kwargs(),
         )
         parts: list[str] = []
         for chunk in response["stream"]:

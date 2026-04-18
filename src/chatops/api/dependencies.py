@@ -79,6 +79,8 @@ def get_llm_service() -> BedrockLLMService:
         model_id=bedrock_settings.model_id,
         timeout_seconds=app_settings.downstream_timeout_seconds,
         client=client,
+        guardrail_id=bedrock_settings.guardrail_id,
+        guardrail_version=bedrock_settings.guardrail_version,
     )
 
 
