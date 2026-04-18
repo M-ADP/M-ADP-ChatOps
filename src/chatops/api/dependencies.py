@@ -8,9 +8,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from chatops.common.config.settings import (
     AppConfig,
+    AWSConfig,
     BedrockConfig,
     DatabaseConfig,
     get_app_config,
+    get_aws_config,
     get_bedrock_config,
     get_db_config,
 )
@@ -60,15 +62,23 @@ def get_registry_service() -> RegistryService:
 
 
 @lru_cache(maxsize=1)
+def get_aws_settings() -> AWSConfig:
+    return get_aws_config()
+
+
+@lru_cache(maxsize=1)
 def get_llm_service() -> BedrockLLMService:
     import boto3
     from botocore.config import Config
 
     app_settings = get_app_settings()
+    aws_settings = get_aws_settings()
     bedrock_settings = get_bedrock_settings()
     client = boto3.client(
         "bedrock-runtime",
         region_name=bedrock_settings.region,
+        aws_access_key_id=aws_settings.aws_access_key_id,
+        aws_secret_access_key=aws_settings.aws_secret_access_key,
         config=Config(
             connect_timeout=app_settings.downstream_timeout_seconds,
             read_timeout=app_settings.downstream_timeout_seconds,

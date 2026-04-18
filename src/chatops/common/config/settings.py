@@ -124,6 +124,20 @@ class DatabaseConfig(LoggedSettings):
         return normalize_database_url(self.database_url)
 
 
+class AWSConfig(LoggedSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(resolve_env_file()),
+        env_file_encoding="utf-8",
+        env_prefix="",
+        extra="ignore",
+    )
+
+    # Vault agent가 .env 파일로 주입하는 AWS credentials.
+    # boto3가 OS 환경변수를 못 읽는 환경(Vault .env 주입 방식)에서 명시적으로 전달.
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+
+
 class BedrockConfig(LoggedSettings):
     model_config = SettingsConfigDict(
         env_file=str(resolve_env_file()),
@@ -161,6 +175,12 @@ def get_app_config() -> AppConfig:
 @lru_cache(maxsize=1)
 def get_db_config() -> DatabaseConfig:
     return DatabaseConfig()
+
+
+@register_config
+@lru_cache(maxsize=1)
+def get_aws_config() -> AWSConfig:
+    return AWSConfig()
 
 
 @register_config
