@@ -23,6 +23,7 @@ from chatops.graph.safety_gate import SafetyGateService
 from chatops.graph.specialist_router import SpecialistRouter
 from chatops.services.decision_trace import log_decision_trace
 from chatops.services.registry import RegistryService
+from chatops.services.response_streaming import get_response_stream_handler
 from chatops.services.tool_schema import (
     ToolSchemaGenerator,
     entry_id_to_tool_name,
@@ -186,11 +187,18 @@ class AgentGraph:
         )
         messages = list(state.get("messages", []))
 
-        response = self.llm_service.converse_with_tools(
-            messages=messages,
-            system_prompt=_AGENT_SYSTEM_PROMPT,
-            tool_specs=tool_specs,
-        )
+        if get_response_stream_handler() is not None:
+            response = self.llm_service.converse_with_tools_stream(
+                messages=messages,
+                system_prompt=_AGENT_SYSTEM_PROMPT,
+                tool_specs=tool_specs,
+            )
+        else:
+            response = self.llm_service.converse_with_tools(
+                messages=messages,
+                system_prompt=_AGENT_SYSTEM_PROMPT,
+                tool_specs=tool_specs,
+            )
 
         assistant_message = response["assistant_message"]
         updates: dict[str, Any] = {
