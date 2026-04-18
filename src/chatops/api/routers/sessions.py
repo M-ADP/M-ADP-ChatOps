@@ -169,6 +169,26 @@ def get_session_history(
     )
 
 
+@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_session(
+    session_id: int,
+    auth: AuthContext = Depends(get_auth_context),
+    db_session: Session = Depends(get_db_session),
+) -> None:
+    repo = SessionRepository(db_session)
+    record = repo.get_for_user(session_id=session_id, user_id=auth.user_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    if repo.has_active_requests(session_id=session_id, user_id=auth.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Session has active requests",
+        )
+
+    repo.delete_for_user(session_id=session_id, user_id=auth.user_id)
+
+
 @router.post("/{session_id}/messages", response_model=CreateSessionMessageResponse, status_code=status.HTTP_202_ACCEPTED)
 def post_session_message(
     session_id: int,

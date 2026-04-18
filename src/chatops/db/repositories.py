@@ -1,4 +1,4 @@
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from chatops.db.models import MessageRecord, RequestEventRecord, RequestRecord, SessionRecord
@@ -43,6 +43,59 @@ class SessionRepository:
             .order_by(SessionRecord.created_at.desc(), SessionRecord.id.desc())
         )
         return list(self.session.execute(query).scalars())
+
+    def has_active_requests(self, session_id: int, user_id: str) -> bool:
+        """세션 내 진행 중인 요청(non-terminal) 존재 여부를 반환한다."""
+        terminal = [s.value for s in RequestStatus.terminal_statuses()]
+        query = (
+            select(RequestRecord.id)
+            .where(
+                RequestRecord.session_id == session_id,
+                RequestRecord.user_id == user_id,
+                RequestRecord.status.notin_(terminal),
+            )
+            .limit(1)
+        )
+        return self.session.execute(query).scalar_one_or_none() is not None
+
+    def delete_for_user(self, session_id: int, user_id: str) -> bool:
+        """세션과 연관 데이터를 모두 삭제한다.
+
+        FK CASCADE가 없으므로 의존 순서대로 직접 삭제한다:
+        request_events → messages → requests → sessions
+
+        Returns:
+            True  — 삭제 성공
+            False — 세션이 없거나 소유권 불일치
+        """
+        record = self.get_for_user(session_id=session_id, user_id=user_id)
+        if record is None:
+            return False
+
+        request_ids_query = select(RequestRecord.id).where(
+            RequestRecord.session_id == session_id,
+        )
+        request_ids = [row[0] for row in self.session.execute(request_ids_query).all()]
+
+        if request_ids:
+            self.session.execute(
+                delete(RequestEventRecord).where(RequestEventRecord.request_id.in_(request_ids))
+            )
+
+        self.session.execute(
+            delete(MessageRecord).where(MessageRecord.session_id == session_id)
+        )
+        self.session.execute(
+            delete(RequestRecord).where(RequestRecord.session_id == session_id)
+        )
+        self.session.execute(
+            delete(SessionRecord).where(
+                SessionRecord.id == session_id,
+                SessionRecord.user_id == user_id,
+            )
+        )
+        self.session.commit()
+        return True
 
 
 class RequestRepository:

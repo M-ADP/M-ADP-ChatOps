@@ -1365,6 +1365,8 @@ def get_request(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     record = _load_request_or_404(db_session, request_id=request_id, user_id=auth.user_id)
+    if record.session_id != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
     return RequestResponse(
         request_id=record.id,
         session_id=record.session_id,
@@ -1398,6 +1400,8 @@ def approve_request(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     record = _load_request_or_404(db_session, request_id=request_id, user_id=auth.user_id)
+    if record.session_id != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
 
     # P0: TTL 만료 확인
     _check_ttl(record)
@@ -1487,6 +1491,8 @@ def reject_request(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     record = _load_request_or_404(db_session, request_id=request_id, user_id=auth.user_id)
+    if record.session_id != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
     if record.status not in ("pending_approval", "interrupted"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Request is not pending approval")
 
