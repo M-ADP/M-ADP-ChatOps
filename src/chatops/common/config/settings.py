@@ -146,7 +146,7 @@ class BedrockConfig(LoggedSettings):
         extra="ignore",
     )
 
-    model_id: str = "amazon.nova-2-lite-v1:0"
+    model_id: str = "us.amazon.nova-2-lite-v1:0"
     region: str = "us-east-1"
     # Guardrails: 설정 시 promptAttack 필터 활성화. 미설정 시 비활성화.
     # 환경변수: BEDROCK_GUARDRAIL_ID, BEDROCK_GUARDRAIL_VERSION
