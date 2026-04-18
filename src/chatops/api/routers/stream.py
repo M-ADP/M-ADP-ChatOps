@@ -87,10 +87,16 @@ def stream_request(
     if request_record is None or request_record.session_id != session_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
 
+    _SSE_HEADERS = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
+
     sequence = int(last_event_id or 0)
     if not follow:
         events = EventService(db_session).list_after_sequence(request_id=request_id, sequence=sequence)
-        return Response(content=_format_sse_body(events), media_type="text/event-stream")
+        return Response(content=_format_sse_body(events), media_type="text/event-stream", headers=_SSE_HEADERS)
 
     session_factory = sessionmaker(
         bind=db_session.get_bind(),
@@ -107,4 +113,5 @@ def stream_request(
             keepalive_seconds=app_config.request_stream_keepalive_seconds,
         ),
         media_type="text/event-stream",
+        headers=_SSE_HEADERS,
     )
