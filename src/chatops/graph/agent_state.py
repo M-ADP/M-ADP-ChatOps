@@ -40,6 +40,7 @@ class AgentState(TypedDict, total=False):
     # 추적
     request_status: str
     executed_operations: list[dict[str, Any]]
+    correction_attempts: int  # false completion 교정 시도 횟수
 
     # 관측성
     execution_audit: dict[str, Any] | None

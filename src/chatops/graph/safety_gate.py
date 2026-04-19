@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from chatops.graph.approval_policy import ApprovalPolicyService
 from chatops.graph.precheck_service import PrecheckService
+from chatops.graph.specialist_router import SpecialistRouter
 from chatops.services.auth import missing_auth_headers, format_missing_auth_headers
 from chatops.services.registry import RegistryEntry
 
@@ -30,8 +31,9 @@ class SafetyDecision:
 
 @dataclass(frozen=True)
 class SafetyGateService:
-    """Agent Loop의 안전 게이트. auth → precheck → approval 순서로 검사한다."""
+    """Agent Loop의 안전 게이트. auth → validate → precheck → approval 순서로 검사한다."""
     precheck_service: PrecheckService
+    specialist_router: SpecialistRouter = field(default_factory=SpecialistRouter)
     approval_policy: ApprovalPolicyService = field(default_factory=ApprovalPolicyService)
 
     def evaluate(
@@ -64,7 +66,19 @@ class SafetyGateService:
                 error_message=format_missing_auth_headers(missing_headers),
             )
 
-        # 2. Precheck (엔티티 존재 확인 + ID resolution)
+        # 2. Specialist 입력 유효성 검사
+        specialist = self.specialist_router.for_operation(operation.id)
+        warnings = specialist.validate_inputs(
+            operation_id=operation.id,
+            resolved_inputs=resolved_inputs,
+        )
+        if warnings:
+            return SafetyDecision(
+                action="blocked",
+                error_message="\n".join(warnings),
+            )
+
+        # 3. Precheck (엔티티 존재 확인 + ID resolution)
         precheck_result = self.precheck_service.run(
             operation=operation,
             resolved_inputs=resolved_inputs,
@@ -79,7 +93,7 @@ class SafetyGateService:
 
         resolved_ids = precheck_result.get("resolved_ids") or {}
 
-        # 3. Approval 체크
+        # 4. Approval 체크
         if operation.requires_confirmation:
             plan_text = self._build_plan_text(operation, resolved_inputs)
             return SafetyDecision(

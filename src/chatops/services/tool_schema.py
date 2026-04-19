@@ -27,31 +27,60 @@ _REFERENCE_FIELDS: dict[str, dict[str, str]] = {
     },
 }
 
-# operation_id별로 어떤 reference 필드가 필요한지 매핑
-_OPERATION_REFERENCE_FIELDS: dict[str, tuple[str, ...]] = {
-    "project.list_projects": (),
-    "project.get": ("project_name",),
-    "project.get_resource_limit": ("project_name",),
-    "project.check_available": ("project_name",),
-    "project.check_owner": ("project_name",),
-    "project.list_members": ("project_name",),
-    "project.create": ("project_name",),
-    "project.update_name": ("project_name",),
-    "project.update_resource": ("project_name",),
-    "project.delete": ("project_name",),
-    "project.add_member": ("project_name", "target_nickname"),
-    "project.remove_member": ("project_name", "target_nickname"),
-    "project.transfer_ownership": ("project_name", "target_nickname"),
-    "application.get_apps": ("project_name",),
-    "application.get_apps_status": ("project_name", "application_name"),
-    "application.get_apps_logs": ("project_name", "application_name"),
-    "application.get_apps_details": ("project_name", "application_name"),
-    "application.create_apps": ("project_name",),
-    "application.delete_apps": ("project_name", "application_name"),
-    "application.patch_apps_resources": ("project_name", "application_name"),
-    "application.patch_apps_github": ("project_name", "application_name"),
-    "monitoring.get_app_deployment_traffic": ("project_name", "application_name"),
+# operation_id별 required reference 필드.
+# body required 필드는 각 ai.yaml의 required_inputs.body.required_fields 참조.
+#
+# operation                          required_refs                    body required (yaml)
+# ─────────────────────────────────  ───────────────────────────────  ─────────────────────────────────────────
+# project.list_projects              (없음)                           (없음)
+# project.get                        project_name                     (없음)
+# project.get_resource_limit         project_name                     (없음)
+# project.check_available            project_name                     (없음)
+# project.check_owner                project_name                     (없음)
+# project.list_members               project_name                     (없음)
+# project.create                     project_name                     name
+# project.update_name                project_name                     name
+# project.update_resource            project_name                     (없음, important: max_cpu/memory/disk)
+# project.delete                     project_name                     (없음)
+# project.add_member                 project_name, target_nickname    user_id
+# project.remove_member              project_name, target_nickname    (없음)
+# project.transfer_ownership         project_name, target_nickname    target_user_id
+# application.get_apps               project_name                     (없음)
+# application.get_apps_status        project_name, application_name   (없음)
+# application.get_apps_logs          project_name, application_name   (없음)
+# application.get_apps_details       project_name, application_name   (없음)
+# application.create_apps            project_name                     name, cpu, memory, disk, project_id
+# application.delete_apps            project_name, application_name   (없음)
+# application.patch_apps_resources   project_name, application_name   application_id, max_cpu, max_memory, max_disk
+# application.patch_apps_github      project_name, application_name   appDeploymentId, owner, repository
+# monitoring.get_app_deployment_traffic project_name, application_name (없음)
+_OPERATION_REQUIRED_REFS: dict[str, tuple[str, ...]] = {
+    "project.list_projects":                  (),
+    "project.get":                            ("project_name",),
+    "project.get_resource_limit":             ("project_name",),
+    "project.check_available":                ("project_name",),
+    "project.check_owner":                    ("project_name",),
+    "project.list_members":                   ("project_name",),
+    "project.create":                         ("project_name",),
+    "project.update_name":                    ("project_name",),
+    "project.update_resource":                ("project_name",),
+    "project.delete":                         ("project_name",),
+    "project.add_member":                     ("project_name", "target_nickname"),
+    "project.remove_member":                  ("project_name", "target_nickname"),
+    "project.transfer_ownership":             ("project_name", "target_nickname"),
+    "application.get_apps":                   ("project_name",),
+    "application.get_apps_status":            ("project_name", "application_name"),
+    "application.get_apps_logs":              ("project_name", "application_name"),
+    "application.get_apps_details":           ("project_name", "application_name"),
+    "application.create_apps":                ("project_name",),
+    "application.delete_apps":                ("project_name", "application_name"),
+    "application.patch_apps_resources":       ("project_name", "application_name"),
+    "application.patch_apps_github":          ("project_name", "application_name"),
+    "monitoring.get_app_deployment_traffic":  ("project_name", "application_name"),
 }
+
+# optional reference 필드 (현재는 없지만 구조 유지)
+_OPERATION_OPTIONAL_REFS: dict[str, tuple[str, ...]] = {}
 
 # 타입 매핑
 _TYPE_MAP: dict[str, str] = {
@@ -111,10 +140,15 @@ class ToolSchemaGenerator:
         properties: dict[str, Any] = {}
         required: list[str] = []
 
-        # 1. Reference 필드 추가
-        ref_fields = _OPERATION_REFERENCE_FIELDS.get(entry.id, ())
-        for ref_name in ref_fields:
+        # 1. Required reference 필드
+        for ref_name in _OPERATION_REQUIRED_REFS.get(entry.id, ()):
             if ref_name in _REFERENCE_FIELDS:
+                properties[ref_name] = dict(_REFERENCE_FIELDS[ref_name])
+                required.append(ref_name)
+
+        # 1b. Optional reference 필드
+        for ref_name in _OPERATION_OPTIONAL_REFS.get(entry.id, ()):
+            if ref_name in _REFERENCE_FIELDS and ref_name not in properties:
                 properties[ref_name] = dict(_REFERENCE_FIELDS[ref_name])
 
         # 2. Path 파라미터
