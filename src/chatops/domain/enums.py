@@ -38,6 +38,21 @@ class RequestStatus(str, Enum):
             cls.SUPERSEDED,
         })
 
+    @classmethod
+    def blocking_statuses(cls) -> frozenset["RequestStatus"]:
+        """세션 삭제를 막는 상태 — 실제로 처리가 진행 중인 경우만 포함.
+
+        대기 상태(created, input_required, ambiguous, pending_approval)는
+        포함하지 않으므로 해당 상태만 남은 세션은 삭제 가능하다.
+        """
+        return frozenset({
+            cls.CLASSIFYING, cls.PROCESSING, cls.APPROVED, cls.EXECUTING,
+        })
+
     @property
     def is_terminal(self) -> bool:
         return self in self.terminal_statuses()
+
+    @property
+    def is_blocking(self) -> bool:
+        return self in self.blocking_statuses()

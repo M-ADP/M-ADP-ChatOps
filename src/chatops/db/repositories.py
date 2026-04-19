@@ -45,14 +45,18 @@ class SessionRepository:
         return list(self.session.execute(query).scalars())
 
     def has_active_requests(self, session_id: int, user_id: str) -> bool:
-        """세션 내 진행 중인 요청(non-terminal) 존재 여부를 반환한다."""
-        terminal = [s.value for s in RequestStatus.terminal_statuses()]
+        """세션 내 실제로 처리 중인 요청 존재 여부를 반환한다.
+
+        대기 상태(created, input_required, ambiguous, pending_approval)는
+        blocking으로 간주하지 않으므로 해당 상태만 남은 세션은 삭제 가능하다.
+        """
+        blocking = [s.value for s in RequestStatus.blocking_statuses()]
         query = (
             select(RequestRecord.id)
             .where(
                 RequestRecord.session_id == session_id,
                 RequestRecord.user_id == user_id,
-                RequestRecord.status.notin_(terminal),
+                RequestRecord.status.in_(blocking),
             )
             .limit(1)
         )
