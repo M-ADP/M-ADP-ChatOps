@@ -362,15 +362,22 @@ def _check_ttl(record: RequestRecord) -> None:
 def _atomic_status_transition(
     db_session: Session,
     request_id: int,
-    from_status: str,
+    from_status: str | list[str],
     to_status: str,
 ) -> bool:
     """P0: 원자적 상태 전이. Race condition 방지."""
+    from sqlalchemy import or_
+
+    if isinstance(from_status, list):
+        condition = or_(*[RequestRecord.status == s for s in from_status])
+    else:
+        condition = RequestRecord.status == from_status
+
     result = db_session.execute(
         update(RequestRecord)
         .where(
             RequestRecord.id == request_id,
-            RequestRecord.status == from_status,
+            condition,
         )
         .values(status=to_status)
     )
@@ -1201,9 +1208,10 @@ def _handle_natural_language_approval(
 ) -> RequestResponse:
     """Handle '응', '실행해' etc. as approval for the pending request."""
     # P0: 중복 실행 방지 — 원자적 상태 전이
+    # pending_approval(기존 방식)과 interrupted(Agent Loop interrupt) 모두 허용
     transitioned = _atomic_status_transition(
         db_session, previous_request.id,
-        from_status=RequestStatus.PENDING_APPROVAL.value,
+        from_status=[RequestStatus.PENDING_APPROVAL.value, "interrupted"],
         to_status=RequestStatus.EXECUTING.value,
     )
     if not transitioned:
@@ -1407,9 +1415,10 @@ def approve_request(
     _check_ttl(record)
 
     # P0: 중복 실행 방지 — 원자적 상태 전이
+    # pending_approval(기존 방식)과 interrupted(Agent Loop interrupt) 모두 허용
     transitioned = _atomic_status_transition(
         db_session, request_id,
-        from_status=RequestStatus.PENDING_APPROVAL.value,
+        from_status=[RequestStatus.PENDING_APPROVAL.value, "interrupted"],
         to_status=RequestStatus.EXECUTING.value,
     )
     if not transitioned:
