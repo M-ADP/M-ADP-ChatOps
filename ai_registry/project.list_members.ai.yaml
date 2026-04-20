@@ -3,15 +3,18 @@ source_file: apis/project.yaml
 operation_id: list_project_members_endpoint_projects__project_id__members_get
 path: /projects/{project_id}/members
 method: GET
-summary: List Project Members Endpoint
-capability: List Project Members Endpoint
+summary: 특정 프로젝트의 멤버 목록을 조회한다
+capability: 프로젝트 멤버 목록 조회 (사용자명과 역할)
 usable_in:
 - query
 operation_kind: read
 when_to_use:
-- 사용자 요청이 'List Project Members Endpoint'에 해당하는 작업일 때 사용합니다.
+- 사용자가 프로젝트의 참여 멤버를 확인하고 싶을 때
+- "멤버 목록", "누가 있어", "멤버 보여줘", "구성원" 등의 표현이 쓰일 때
 when_not_to_use:
-- 다른 리소스를 조회하거나 변경하는 요청이면 사용하지 않습니다.
+- 멤버를 추가하려면 project.add_member를 사용
+- 멤버를 제거하려면 project.remove_member를 사용
+- 프로젝트 목록 자체가 필요하면 project.list_projects를 사용
 requires_confirmation: false
 risk_level: low
 side_effects: []
@@ -35,12 +38,12 @@ required_inputs:
   query: []
   body: null
 preconditions:
-- 필수 입력값이 모두 준비되어 있어야 합니다.
+- 조회할 프로젝트의 이름 또는 ID가 필요합니다.
 missing_info_questions:
-- X-User-Id 값을 확인해야 합니다.
-- X-User-Role 값을 확인해야 합니다.
-- project_id 값을 확인해야 합니다.
-response_interpretation: 응답 데이터를 현재 상태 요약과 핵심 수치 중심으로 정리합니다.
+- 어떤 프로젝트의 멤버 목록을 조회할까요?
+response_interpretation: 각 멤버의 사용자명과 역할(OWNER/MEMBER)을 쉼표로 구분하여 나열합니다.
 plan_template: []
 examples:
-- List Project Members Endpoint
+- "bang 프로젝트 멤버 보여줘"
+- "test 프로젝트에 누가 있어?"
+- "myproject 구성원 목록"

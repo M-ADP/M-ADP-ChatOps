@@ -3,19 +3,22 @@ source_file: apis/project.yaml
 operation_id: add_project_member_endpoint_projects__project_id__members_post
 path: /projects/{project_id}/members
 method: POST
-summary: Add Project Member Endpoint
-capability: Add Project Member Endpoint
+summary: 프로젝트에 멤버(사용자)를 추가한다
+capability: 프로젝트 멤버 추가 (특정 사용자를 구성원으로 등록)
 usable_in:
 - command
 operation_kind: write
 when_to_use:
-- 사용자 요청이 'Add Project Member Endpoint'에 해당하는 작업일 때 사용합니다.
+- 프로젝트에 새 멤버를 참여시킬 때
+- "멤버 추가", "누구 초대해줘", "팀에 넣어줘" 등의 표현이 쓰일 때
 when_not_to_use:
-- 다른 리소스를 조회하거나 변경하는 요청이면 사용하지 않습니다.
+- 멤버를 빼려면 project.remove_member를 사용
+- 멤버 목록을 보려면 project.list_members를 사용
+- 소유권을 이전하려면 project.transfer_ownership을 사용
 requires_confirmation: true
 risk_level: medium
 side_effects:
-- Add Project Member Endpoint
+- 대상 사용자가 프로젝트에 접근할 수 있게 됨
 required_headers:
 - X-User-Id
 - X-User-Role
@@ -42,16 +45,16 @@ required_inputs:
     required_fields:
     - user_id
 preconditions:
-- 필수 입력값이 모두 준비되어 있어야 합니다.
+- 대상 프로젝트와 추가할 사용자 식별자가 필요합니다.
 missing_info_questions:
-- X-User-Id 값을 확인해야 합니다.
-- X-User-Role 값을 확인해야 합니다.
-- project_id 값을 확인해야 합니다.
-- 요청 본문의 user_id 값을 확인해야 합니다.
-response_interpretation: 응답의 성공 여부와 생성 또는 변경된 핵심 결과를 사용자에게 요약합니다.
+- 어느 프로젝트에 멤버를 추가할까요?
+- 추가할 사용자는 누구인가요? (사용자 ID 또는 사용자명)
+response_interpretation: 추가된 멤버의 사용자명과 프로젝트 이름을 사용자에게 요약합니다.
 plan_template:
-- Add Project Member Endpoint 실행에 필요한 입력값을 확인합니다.
-- POST /projects/{project_id}/members 호출 전 영향 범위를 설명합니다.
-- POST /projects/{project_id}/members 호출 결과를 검증하고 사용자에게 요약합니다.
+- 대상 프로젝트와 추가 대상 사용자를 확인합니다.
+- 추가 전 사용자에게 영향을 설명하고 승인을 받습니다.
+- 추가 결과를 요약합니다.
 examples:
-- Add Project Member Endpoint
+- "bang 프로젝트에 jaemin 추가해줘"
+- "test 프로젝트에 홍길동 초대"
+- "myproject 팀에 user123 넣어줘"

@@ -3,29 +3,36 @@ source_file: apis/application.yaml
 operation_id: null
 path: /apps
 method: DELETE
-summary: 애플리케이션 제거하기
-capability: 애플리케이션 제거하기
+summary: 특정 애플리케이션을 제거한다
+capability: 애플리케이션 삭제 (배포 중지 및 관련 자원 회수)
 usable_in:
 - command
 operation_kind: delete
 when_to_use:
-- 사용자 요청이 '애플리케이션 제거하기'에 해당하는 작업일 때 사용합니다.
+- 프로젝트 내 특정 애플리케이션을 더 이상 운영하지 않을 때
+- "앱 삭제", "앱 내려줘", "배포 제거", "application 지워" 등의 표현이 쓰일 때
 when_not_to_use:
-- 다른 리소스를 조회하거나 변경하는 요청이면 사용하지 않습니다.
+- 프로젝트 전체를 삭제하려면 project.delete를 사용
+- 일시 중지 기능은 별도로 없으므로, 잠깐 끄는 게 목적이면 사용자에게 다시 확인
+- 자원 사양만 줄이려면 application.patch_apps_resources를 사용
 requires_confirmation: true
 risk_level: high
 side_effects:
-- 애플리케이션 제거하기
+- 애플리케이션이 중지되고 관련 자원이 회수됨
+- 복구 불가
 required_headers: []
 required_inputs:
   headers: []
   path: []
   query: []
   body:
-    required: false
+    required: true
     content_type: application/json
     schema_ref: '#/components/schemas/DeleteAppDeploymentRequestDto'
     type: object
+    required_fields:
+    - project_id
+    - application_id
 important_inputs:
   path: []
   query: []
@@ -33,14 +40,16 @@ important_inputs:
   - project_id
   - application_id
 preconditions:
-- 필수 입력값이 모두 준비되어 있어야 합니다.
+- 삭제할 프로젝트와 애플리케이션을 특정해야 합니다.
 missing_info_questions:
-- project_id 값을 확인해야 합니다.
-- application_id 값을 확인해야 합니다.
-response_interpretation: 응답의 성공 여부와 생성 또는 변경된 핵심 결과를 사용자에게 요약합니다.
+- 어느 프로젝트의 앱인가요?
+- 삭제할 애플리케이션은 무엇인가요? (이름 또는 ID)
+response_interpretation: 삭제된 애플리케이션 이름과 프로젝트를 명시하고, 불가역임을 한 번 더 상기시킵니다.
 plan_template:
-- 애플리케이션 제거하기 실행에 필요한 입력값을 확인합니다.
-- DELETE /apps 호출 전 영향 범위를 설명합니다.
-- DELETE /apps 호출 결과를 검증하고 사용자에게 요약합니다.
+- 삭제 대상 애플리케이션을 특정합니다.
+- 삭제가 불가역적임을 경고하고 사용자 승인을 받습니다.
+- 삭제 결과를 요약합니다.
 examples:
-- 애플리케이션 제거하기
+- "bang 프로젝트 api 앱 삭제"
+- "test 프로젝트에서 webapp 내려줘"
+- "myproject worker 애플리케이션 제거"
