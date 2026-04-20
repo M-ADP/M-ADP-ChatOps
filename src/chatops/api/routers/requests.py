@@ -1121,17 +1121,52 @@ def create_request(
         ).start()
         return _build_request_response(record, record.message_text)
 
-    graph_result = _invoke_graph_handle_request(
-        graph_service,
-        session_id=session_id,
-        user_id=auth.user_id,
-        message_text=graph_message_text,
-        user_role=auth.user_role,
-        session_context=session_context,
-    )
+    request_id = IdGenerator.generate_sonyflake_id()
+    try:
+        graph_result = _invoke_graph_handle_request(
+            graph_service,
+            session_id=session_id,
+            user_id=auth.user_id,
+            message_text=graph_message_text,
+            user_role=auth.user_role,
+            session_context=session_context,
+            request_id=request_id,
+        )
+    except Exception:
+        logger.exception("Sync request processing failed for request_id=%s", request_id)
+        record = repo.create(
+            request_id=request_id,
+            session_id=session_id,
+            user_id=auth.user_id,
+            message_text=payload.message,
+            effective_message_text=graph_message_text,
+            request_type="agent",
+            requires_approval=False,
+        )
+        record.status = RequestStatus.FAILED.value
+        record.final_response = _decorate_final_response(
+            payload.message,
+            "요청 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+        )
+        db_session.commit()
+        db_session.refresh(record)
+        _append_structured_event(
+            EventService(db_session),
+            request_id=record.id,
+            session_id=record.session_id,
+            event_type="request.failed",
+            phase="response",
+            step="failed",
+            message="요청 처리에 실패했습니다.",
+            status_value=record.status,
+            progress=100,
+            payload={"final_response": record.final_response},
+        )
+        _sync_assistant_message(db_session, record)
+        return _build_request_response(record, record.message_text)
 
     record = repo.create(
-        request_id=graph_result.request_id,
+        request_id=request_id,
         session_id=session_id,
         user_id=auth.user_id,
         message_text=payload.message,

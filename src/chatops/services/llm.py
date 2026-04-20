@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Protocol
+
+logger = logging.getLogger(__name__)
 
 from chatops.services.response_streaming import get_response_stream_handler
 
@@ -107,7 +110,8 @@ class BedrockLLMService:
                 "needs_confirmation": bool(parsed.get("needs_confirmation", False)),
             }
             return self._apply_classification_guardrails(message_text, result)
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError, Exception):
+        except Exception as exc:
+            logger.warning("classify_message fallback: %s", exc, exc_info=True)
             return self._fallback_classification(message_text)
 
     def answer_inquiry(
@@ -127,7 +131,8 @@ class BedrockLLMService:
                 ),
                 user_prompt=f"사용자 문의: {message_text}\nregistry context:\n{registry_context}",
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("answer_inquiry fallback: %s", exc, exc_info=True)
             return self._fallback_inquiry_answer(message_text, supported_operations)
 
     def interpret_query_result(self, message_text: str, raw_result: dict[str, Any]) -> str:
@@ -136,7 +141,8 @@ class BedrockLLMService:
                 system_prompt="당신은 조회 결과를 해석하는 운영 도우미다. 결과를 짧게 요약한다.",
                 user_prompt=f"사용자 요청: {message_text}\n조회 결과: {json.dumps(raw_result, ensure_ascii=False)}",
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("interpret_query_result fallback: %s", exc, exc_info=True)
             return self._fallback_query_interpretation(raw_result)
 
     def plan_command(self, message_text: str, operation_ids: list[str]) -> str:
@@ -145,7 +151,8 @@ class BedrockLLMService:
                 system_prompt="당신은 명령 실행 계획 작성기다. 실행 전에 보여줄 짧은 계획을 한국어로 작성한다.",
                 user_prompt=f"사용자 요청: {message_text}\n후보 작업: {', '.join(operation_ids)}",
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("plan_command fallback: %s", exc, exc_info=True)
             return self._fallback_command_plan(operation_ids)
 
     def build_plan_object(
@@ -170,7 +177,8 @@ class BedrockLLMService:
             if not isinstance(parsed, dict):
                 raise ValueError("plan object must be a JSON object")
             return parsed
-        except (json.JSONDecodeError, ValueError, TypeError, Exception):
+        except Exception as exc:
+            logger.warning("build_plan_object fallback: %s", exc, exc_info=True)
             return self._fallback_plan_object(
                 message_text=message_text,
                 request_type=request_type,
@@ -213,7 +221,8 @@ class BedrockLLMService:
             if not isinstance(parsed, dict):
                 raise ValueError("verifier decision must be a JSON object")
             return parsed
-        except (json.JSONDecodeError, ValueError, TypeError, Exception):
+        except Exception as exc:
+            logger.warning("verify_execution fallback: %s", exc, exc_info=True)
             return self._fallback_verifier_decision(execution_result)
 
     # ──────────────────────────────────────────────────
