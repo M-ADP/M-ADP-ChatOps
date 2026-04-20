@@ -10,7 +10,7 @@ usable_in:
 operation_kind: read
 when_to_use:
 - 애플리케이션의 스펙, 자원 할당, 연결된 GitHub 저장소 등 세부 정보가 필요할 때
-- "앱 세부 정보", "설정 보여줘", "CPU 얼마 줬어?", "어느 레포 연결됐어?" 등의 표현이 쓰일 때
+- '앱 세부 정보, 설정 보여줘, CPU 얼마 줬어?, 어느 레포 연결됐어? 등의 표현이 쓰일 때'
 when_not_to_use:
 - 단순 상태(running 여부)만 보려면 application.get_apps_status를 사용
 - 로그는 application.get_apps_logs를 사용

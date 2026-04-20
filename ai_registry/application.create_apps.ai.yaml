@@ -10,7 +10,7 @@ usable_in:
 operation_kind: write
 when_to_use:
 - 프로젝트 안에 새 앱을 배포하거나 만들 때
-- "앱 만들어줘", "애플리케이션 생성", "배포해줘", "새 앱 올려줘" 등의 표현이 쓰일 때
+- '앱 만들어줘, 애플리케이션 생성, 배포해줘, 새 앱 올려줘 등의 표현이 쓰일 때'
 when_not_to_use:
 - 새 프로젝트를 만드는 경우에는 project.create를 사용 (애플리케이션이 아닌 프로젝트 단위)
 - 기존 앱의 자원을 바꾸는 경우에는 application.patch_apps_resources를 사용

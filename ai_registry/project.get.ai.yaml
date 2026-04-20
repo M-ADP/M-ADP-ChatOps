@@ -10,7 +10,7 @@ usable_in:
 operation_kind: read
 when_to_use:
 - 사용자가 특정 프로젝트의 자세한 정보를 요청할 때
-- "프로젝트 상세", "프로젝트 자세히 보여줘", "{이름} 프로젝트 정보" 등의 표현이 쓰일 때
+- '프로젝트 상세, 프로젝트 자세히 보여줘, {이름} 프로젝트 정보 등의 표현이 쓰일 때'
 when_not_to_use:
 - 전체 프로젝트 목록이 필요하면 project.list_projects를 사용
 - 프로젝트의 자원 한도만 필요하면 project.get_resource_limit을 사용

@@ -10,7 +10,7 @@ usable_in:
 operation_kind: read
 when_to_use:
 - 특정 프로젝트 안에 어떤 애플리케이션들이 있는지 한 번에 확인하고 싶을 때
-- "앱 목록", "애플리케이션 뭐 있어", "배포된 앱들", "앱 상태 보여줘" 등의 표현이 쓰일 때
+- '앱 목록, 애플리케이션 뭐 있어, 배포된 앱들, 앱 상태 보여줘 등의 표현이 쓰일 때'
 when_not_to_use:
 - 단일 애플리케이션의 상태만 필요하면 application.get_apps_status를 사용
 - 애플리케이션의 세부 스펙(자원/리소스/설정)이 필요하면 application.get_apps_details를 사용

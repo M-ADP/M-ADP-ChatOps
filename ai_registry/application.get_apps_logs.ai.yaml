@@ -10,7 +10,7 @@ usable_in:
 operation_kind: read
 when_to_use:
 - 애플리케이션의 최근 로그를 확인해야 할 때
-- "로그 보여줘", "에러 확인", "무슨 로그 찍히고 있어", "logs" 등의 표현이 쓰일 때
+- '로그 보여줘, 에러 확인, 무슨 로그 찍히고 있어, logs 등의 표현이 쓰일 때'
 - 에러 디버깅이나 장애 원인 파악이 필요할 때
 when_not_to_use:
 - 단순 상태(running 여부)만 보려면 application.get_apps_status를 사용

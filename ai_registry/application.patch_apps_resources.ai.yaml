@@ -10,7 +10,7 @@ usable_in:
 operation_kind: write
 when_to_use:
 - 이미 배포된 애플리케이션의 CPU/메모리/디스크를 조정할 때
-- "앱 CPU 늘려줘", "메모리 올려", "자원 줄여줘" 등 애플리케이션 단위 자원 변경 표현이 쓰일 때
+- '앱 CPU 늘려줘, 메모리 올려, 자원 줄여줘 등 애플리케이션 단위 자원 변경 표현이 쓰일 때'
 when_not_to_use:
 - 프로젝트 전체 자원 한도를 바꾸는 경우에는 project.update_resource를 사용
 - GitHub 레포 연결만 바꾸려면 application.patch_apps_github을 사용

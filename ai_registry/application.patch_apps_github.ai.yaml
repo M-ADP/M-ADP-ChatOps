@@ -10,7 +10,7 @@ usable_in:
 operation_kind: write
 when_to_use:
 - 애플리케이션의 소스 저장소(GitHub)를 변경하거나 새로 연결할 때
-- "깃허브 연결", "레포 바꿔", "브랜치 변경", "소스 연결" 등의 표현이 쓰일 때
+- '깃허브 연결, 레포 바꿔, 브랜치 변경, 소스 연결 등의 표현이 쓰일 때'
 when_not_to_use:
 - 자원(CPU/메모리/디스크) 변경은 application.patch_apps_resources를 사용
 - 새 앱을 만드는 경우에는 application.create_apps를 사용

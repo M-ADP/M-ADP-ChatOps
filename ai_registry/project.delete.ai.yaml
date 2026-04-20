@@ -10,7 +10,7 @@ usable_in:
 operation_kind: delete
 when_to_use:
 - 사용자가 프로젝트 자체를 제거하려고 할 때
-- "프로젝트 삭제", "프로젝트 지워줘", "delete project" 등의 표현이 쓰일 때
+- '프로젝트 삭제, 프로젝트 지워줘, delete project 등의 표현이 쓰일 때'
 when_not_to_use:
 - 프로젝트 안의 특정 애플리케이션만 삭제하려면 application.delete_apps를 사용
 - 멤버만 제거하려면 project.remove_member를 사용

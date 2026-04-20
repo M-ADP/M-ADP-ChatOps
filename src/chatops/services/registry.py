@@ -293,6 +293,11 @@ class RegistryService:
                 score += 18
             elif entry.id == "project.list_projects":
                 score -= 4
+        if self._is_project_list_request(user_text):
+            if entry.id == "project.list_projects":
+                score += 12
+            elif entry.id == "project.get":
+                score -= 8
         if self._is_owner_check_request(user_text):
             if entry.id == "project.check_owner":
                 score += 18
@@ -418,6 +423,14 @@ class RegistryService:
     def _is_owner_check_request(self, user_text: str) -> bool:
         lowered = user_text.lower()
         return self._has_project_context(user_text) and any(marker in lowered for marker in ("owner", "소유자"))
+
+    def _is_project_list_request(self, user_text: str) -> bool:
+        return (
+            self._has_project_context(user_text)
+            and any(marker in user_text for marker in ("목록", "리스트"))
+            and not self._is_member_list_request(user_text)
+            and not self._has_application_context(user_text)
+        )
 
     def _is_available_check_request(self, user_text: str) -> bool:
         return self._has_project_context(user_text) and any(

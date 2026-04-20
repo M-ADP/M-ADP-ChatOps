@@ -10,7 +10,7 @@ usable_in:
 operation_kind: write
 when_to_use:
 - 프로젝트의 CPU/메모리/디스크 쿼터를 늘리거나 줄일 때
-- "리소스 늘려줘", "CPU 4로 바꿔줘", "자원 한도 변경", "쿼터 조정" 등의 표현이 쓰일 때
+- '리소스 늘려줘, CPU 4로 바꿔줘, 자원 한도 변경, 쿼터 조정 등의 표현이 쓰일 때'
 when_not_to_use:
 - 프로젝트 이름만 바꿀 때는 project.update_name을 사용
 - 자원 한도를 조회만 할 때는 project.get_resource_limit을 사용

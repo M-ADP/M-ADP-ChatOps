@@ -10,7 +10,7 @@ usable_in:
 operation_kind: read
 when_to_use:
 - 사용자가 프로젝트의 참여 멤버를 확인하고 싶을 때
-- "멤버 목록", "누가 있어", "멤버 보여줘", "구성원" 등의 표현이 쓰일 때
+- '멤버 목록, 누가 있어, 멤버 보여줘, 구성원 등의 표현이 쓰일 때'
 when_not_to_use:
 - 멤버를 추가하려면 project.add_member를 사용
 - 멤버를 제거하려면 project.remove_member를 사용

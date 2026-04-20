@@ -10,7 +10,7 @@ usable_in:
 operation_kind: read
 when_to_use:
 - 하나의 특정 애플리케이션이 지금 돌아가고 있는지 확인할 때
-- "앱 상태", "살아있어?", "running이야?", "헬스체크" 등의 표현이 쓰일 때
+- '앱 상태, 살아있어?, running이야?, 헬스체크 등의 표현이 쓰일 때'
 when_not_to_use:
 - 여러 애플리케이션을 한 번에 보려면 application.get_apps를 사용
 - 로그가 필요하면 application.get_apps_logs를 사용

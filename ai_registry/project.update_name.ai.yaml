@@ -10,7 +10,7 @@ usable_in:
 operation_kind: write
 when_to_use:
 - 이미 존재하는 프로젝트의 이름을 바꿀 때
-- "이름 변경", "이름 바꿔줘", "rename", "{old}를 {new}로 바꿔" 등의 표현이 쓰일 때
+- '이름 변경, 이름 바꿔줘, rename, {old}를 {new}로 바꿔 등의 표현이 쓰일 때'
 when_not_to_use:
 - 새 프로젝트를 만드는 경우에는 project.create를 사용 (이 경우 '이름'은 단지 새로 만드는 이름이지 변경이 아님)
 - 자원 한도 변경은 project.update_resource를 사용

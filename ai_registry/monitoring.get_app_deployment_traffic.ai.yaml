@@ -10,7 +10,7 @@ usable_in:
 operation_kind: read
 when_to_use:
 - 애플리케이션이 받은 요청량, 트래픽 추이를 확인할 때
-- "트래픽 얼마나 왔어?", "요청 수", "모니터링 지표", "traffic" 등의 표현이 쓰일 때
+- '트래픽 얼마나 왔어?, 요청 수, 모니터링 지표, traffic 등의 표현이 쓰일 때'
 - 특정 기간(시작/종료)의 부하 분석이 필요할 때
 when_not_to_use:
 - 로그가 필요하면 application.get_apps_logs를 사용

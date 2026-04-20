@@ -10,7 +10,7 @@ usable_in:
 operation_kind: read
 when_to_use:
 - 사용자가 프로젝트의 자원 한도(쿼터)만 확인하려 할 때
-- "리소스 한도", "자원 제한", "CPU/메모리 얼마까지", "쿼터" 등의 표현이 쓰일 때
+- '리소스 한도, 자원 제한, CPU/메모리 얼마까지, 쿼터 등의 표현이 쓰일 때'
 when_not_to_use:
 - 프로젝트 전체 상세 정보가 필요하면 project.get을 사용
 - 자원 한도를 변경하려면 project.update_resource를 사용

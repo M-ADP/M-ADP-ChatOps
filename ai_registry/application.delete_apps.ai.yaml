@@ -10,7 +10,7 @@ usable_in:
 operation_kind: delete
 when_to_use:
 - 프로젝트 내 특정 애플리케이션을 더 이상 운영하지 않을 때
-- "앱 삭제", "앱 내려줘", "배포 제거", "application 지워" 등의 표현이 쓰일 때
+- '앱 삭제, 앱 내려줘, 배포 제거, application 지워 등의 표현이 쓰일 때'
 when_not_to_use:
 - 프로젝트 전체를 삭제하려면 project.delete를 사용
 - 일시 중지 기능은 별도로 없으므로, 잠깐 끄는 게 목적이면 사용자에게 다시 확인

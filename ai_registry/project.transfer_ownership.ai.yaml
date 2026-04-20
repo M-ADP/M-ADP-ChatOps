@@ -10,7 +10,7 @@ usable_in:
 operation_kind: write
 when_to_use:
 - 프로젝트 OWNER 권한을 다른 멤버에게 넘기려 할 때
-- "소유권 이전", "주인 바꿔", "OWNER 변경", "오너 넘겨줘" 등의 표현이 쓰일 때
+- '소유권 이전, 주인 바꿔, OWNER 변경, 오너 넘겨줘 등의 표현이 쓰일 때'
 when_not_to_use:
 - 일반 멤버 추가/삭제는 project.add_member / project.remove_member를 사용
 - 단순히 소유자가 누구인지 확인만 할 때는 project.check_owner를 사용
