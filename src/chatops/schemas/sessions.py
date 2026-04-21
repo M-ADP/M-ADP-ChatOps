@@ -9,11 +9,13 @@ from chatops.schemas.messages import ConversationMessage
 
 class CreateSessionRequest(BaseModel):
     title: str | None = None
+    project_id: int | None = None
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "title": "프로젝트 생성 상담",
+                "project_id": 1001,
             }
         }
     )
@@ -22,6 +24,7 @@ class CreateSessionRequest(BaseModel):
 class SessionResponse(BaseModel):
     session_id: int
     user_id: str
+    project_id: int | None = None
     title: str | None = None
     status: str
     created_at: datetime | None = None
@@ -32,6 +35,7 @@ class SessionResponse(BaseModel):
             "example": {
                 "session_id": 1001,
                 "user_id": "user-1",
+                "project_id": 1001,
                 "title": "프로젝트 생성 상담",
                 "status": "active",
                 "created_at": "2026-04-02T10:00:00Z",
@@ -43,6 +47,7 @@ class SessionResponse(BaseModel):
 
 class SessionListItem(BaseModel):
     session_id: int
+    project_id: int | None = None
     title: str | None = None
     status: str
     last_message_preview: str | None = None
@@ -53,6 +58,7 @@ class SessionListItem(BaseModel):
         json_schema_extra={
             "example": {
                 "session_id": 1001,
+                "project_id": 1001,
                 "title": "프로젝트 생성 상담",
                 "status": "active",
                 "last_message_preview": "계획을 검토하고 승인하면 바로 실행합니다.",

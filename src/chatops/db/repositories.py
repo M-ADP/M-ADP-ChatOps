@@ -1,17 +1,63 @@
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from chatops.db.models import MessageRecord, RequestEventRecord, RequestRecord, SessionRecord
-from chatops.domain.enums import RequestStatus, SessionStatus
+from chatops.db.models import MessageRecord, ProjectRecord, RequestEventRecord, RequestRecord, SessionRecord
+from chatops.domain.enums import ProjectStatus, RequestStatus, SessionStatus
+
+
+class ProjectRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def create(self, user_id: str, name: str, description: str | None) -> ProjectRecord:
+        record = ProjectRecord(
+            user_id=user_id,
+            name=name,
+            description=description,
+            status=ProjectStatus.ACTIVE.value,
+        )
+        self.session.add(record)
+        self.session.commit()
+        self.session.refresh(record)
+        return record
+
+    def get_for_user(self, project_id: int, user_id: str) -> ProjectRecord | None:
+        query = select(ProjectRecord).where(
+            ProjectRecord.id == project_id,
+            ProjectRecord.user_id == user_id,
+        )
+        return self.session.execute(query).scalar_one_or_none()
+
+    def list_for_user(self, user_id: str) -> list[ProjectRecord]:
+        query = (
+            select(ProjectRecord)
+            .where(ProjectRecord.user_id == user_id)
+            .order_by(ProjectRecord.created_at.desc(), ProjectRecord.id.desc())
+        )
+        return list(self.session.execute(query).scalars())
+
+    def delete_for_user(self, project_id: int, user_id: str) -> bool:
+        record = self.get_for_user(project_id=project_id, user_id=user_id)
+        if record is None:
+            return False
+        self.session.execute(
+            delete(ProjectRecord).where(
+                ProjectRecord.id == project_id,
+                ProjectRecord.user_id == user_id,
+            )
+        )
+        self.session.commit()
+        return True
 
 
 class SessionRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def create(self, user_id: str, title: str | None) -> SessionRecord:
+    def create(self, user_id: str, title: str | None, project_id: int | None = None) -> SessionRecord:
         record = SessionRecord(
             user_id=user_id,
+            project_id=project_id,
             title=title,
             status=SessionStatus.ACTIVE.value,
         )
@@ -36,12 +82,11 @@ class SessionRepository:
         self.session.refresh(record)
         return record
 
-    def list_for_user(self, user_id: str) -> list[SessionRecord]:
-        query = (
-            select(SessionRecord)
-            .where(SessionRecord.user_id == user_id)
-            .order_by(SessionRecord.created_at.desc(), SessionRecord.id.desc())
-        )
+    def list_for_user(self, user_id: str, project_id: int | None = None) -> list[SessionRecord]:
+        query = select(SessionRecord).where(SessionRecord.user_id == user_id)
+        if project_id is not None:
+            query = query.where(SessionRecord.project_id == project_id)
+        query = query.order_by(SessionRecord.created_at.desc(), SessionRecord.id.desc())
         return list(self.session.execute(query).scalars())
 
     def has_active_requests(self, session_id: int, user_id: str) -> bool:

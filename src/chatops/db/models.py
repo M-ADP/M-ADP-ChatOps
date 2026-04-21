@@ -5,11 +5,27 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from chatops.common.id_generator import IdGenerator
 from chatops.db.base import Base
-from chatops.domain.enums import RequestStatus, RequestType, SessionStatus
+from chatops.domain.enums import ProjectStatus, RequestStatus, RequestType, SessionStatus
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class ProjectRecord(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=IdGenerator.generate_sonyflake_id)
+    user_id: Mapped[str] = mapped_column(String(255), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default=ProjectStatus.ACTIVE.value)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        onupdate=_utc_now,
+    )
 
 
 class SessionRecord(Base):
@@ -17,6 +33,7 @@ class SessionRecord(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=IdGenerator.generate_sonyflake_id)
     user_id: Mapped[str] = mapped_column(String(255), index=True)
+    project_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("projects.id"), index=True, nullable=True)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default=SessionStatus.ACTIVE.value)
     session_summary: Mapped[str | None] = mapped_column(Text(), nullable=True)

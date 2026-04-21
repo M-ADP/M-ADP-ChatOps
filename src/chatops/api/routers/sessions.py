@@ -34,6 +34,7 @@ def _build_session_response(record) -> SessionResponse:
     return SessionResponse(
         session_id=record.id,
         user_id=record.user_id,
+        project_id=record.project_id,
         title=record.title,
         status=record.status,
         created_at=record.created_at,
@@ -47,7 +48,11 @@ def create_session(
     auth: AuthContext = Depends(get_auth_context),
     db_session: Session = Depends(get_db_session),
 ) -> SessionResponse:
-    record = SessionRepository(db_session).create(user_id=auth.user_id, title=payload.title)
+    record = SessionRepository(db_session).create(
+        user_id=auth.user_id,
+        title=payload.title,
+        project_id=payload.project_id,
+    )
     return _build_session_response(record)
 
 
@@ -55,11 +60,12 @@ def create_session(
 def list_sessions(
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None),
+    project_id: int | None = Query(default=None),
     auth: AuthContext = Depends(get_auth_context),
     db_session: Session = Depends(get_db_session),
 ) -> SessionListResponse:
     session_repo = SessionRepository(db_session)
-    sessions = session_repo.list_for_user(user_id=auth.user_id)
+    sessions = session_repo.list_for_user(user_id=auth.user_id, project_id=project_id)
     message_repo = MessageRepository(db_session)
     messages = message_repo.list_for_sessions([record.id for record in sessions], auth.user_id)
     service = SessionMessageService()

@@ -1,6 +1,11 @@
 from enum import Enum
 
 
+class ProjectStatus(str, Enum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
 class SessionStatus(str, Enum):
     ACTIVE = "active"
     ARCHIVED = "archived"

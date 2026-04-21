@@ -48,6 +48,7 @@ class SessionMessageService:
                 (
                     SessionListItem(
                         session_id=session.id,
+                        project_id=session.project_id,
                         title=session.title,
                         status=session.status,
                         last_message_preview=latest_preview,
