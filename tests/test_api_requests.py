@@ -177,6 +177,18 @@ class AsyncCommandStubGraphService(StubGraphService):
         )
 
 
+class FailingGraphService:
+    def preview_request(
+        self,
+        message_text: str,
+        session_context: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        raise AssertionError("easter egg requests must not reach graph preview")
+
+    def handle_request(self, **kwargs) -> GraphResult:
+        raise AssertionError("easter egg requests must not reach graph handler")
+
+
 @pytest.fixture()
 def client(db_session):
     app = create_app()
@@ -1124,7 +1136,7 @@ def test_create_request_logs_follow_up_rewrite_trace(db_session, caplog) -> None
     assert rewrite_payload["data"]["rewritten_message"] == "project_name=killblack"
 
 
-def test_create_request_decorates_final_response_with_easter_egg(db_session, monkeypatch) -> None:
+def test_create_request_returns_easter_egg_before_command_processing(db_session, monkeypatch) -> None:
     app = create_app()
 
     def override_db_session():
@@ -1163,10 +1175,54 @@ def test_create_request_decorates_final_response_with_easter_egg(db_session, mon
 
     assert response.status_code == 202
     body = response.json()
-    assert body["assistant_message"] == "명령 실행 완료\n\n조재민 이스터에그"
+    assert body["status"] == "completed"
+    assert body["request_type"] == "inquiry"
+    assert body["assistant_message"] == "조재민 이스터에그"
     request = RequestRepository(db_session).get_for_user(request_id=body["request_id"], user_id="user-1")
     assert request is not None
-    assert request.final_response == "명령 실행 완료\n\n조재민 이스터에그"
+    assert request.final_response == "조재민 이스터에그"
+
+
+def test_create_request_returns_easter_egg_before_graph_classification(db_session, monkeypatch) -> None:
+    app = create_app()
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return FailingGraphService()
+
+    monkeypatch.setattr(
+        requests_router,
+        "easter_egg_service",
+        requests_router.EasterEggService({"조재민": "조재민 이스터에그"}),
+    )
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/chatops/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        response = client.post(
+            f"/chatops/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "조재민"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["request_type"] == "inquiry"
+    assert body["assistant_message"] == "조재민 이스터에그"
+    request = RequestRepository(db_session).get_for_user(request_id=body["request_id"], user_id="user-1")
+    assert request is not None
+    assert request.final_response == "조재민 이스터에그"
 
 
 def test_natural_language_approve_triggers_execution(db_session) -> None:

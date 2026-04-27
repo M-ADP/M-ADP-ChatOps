@@ -98,7 +98,7 @@ class BedrockLLMService:
                 ),
                 user_prompt=message_text,
             )
-            parsed = json.loads(content)
+            parsed = self._parse_json_response(content, context="classify")
             result = {
                 "request_type": parsed["request_type"],
                 "intent": parsed.get("intent", ""),
@@ -173,9 +173,7 @@ class BedrockLLMService:
                     f"candidate_operation_ids: {', '.join(candidate_operation_ids)}"
                 ),
             )
-            parsed = json.loads(content)
-            if not isinstance(parsed, dict):
-                raise ValueError("plan object must be a JSON object")
+            parsed = self._parse_json_response(content, context="plan object")
             return parsed
         except Exception as exc:
             logger.warning("build_plan_object fallback: %s", exc, exc_info=True)
@@ -217,9 +215,7 @@ class BedrockLLMService:
                 ),
                 user_prompt=user_prompt,
             )
-            parsed = json.loads(content)
-            if not isinstance(parsed, dict):
-                raise ValueError("verifier decision must be a JSON object")
+            parsed = self._parse_json_response(content, context="verifier decision")
             return parsed
         except Exception as exc:
             logger.warning("verify_execution fallback: %s", exc, exc_info=True)
@@ -418,6 +414,22 @@ class BedrockLLMService:
             **self._guardrail_kwargs(),
         )
         return self._extract_text(body).strip()
+
+    def _parse_json_response(self, content: str, *, context: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as exc:
+            preview = content[:200].replace("\n", "\\n")
+            if not preview:
+                preview = "<empty>"
+            detail = "empty response" if not content.strip() else f"response preview={preview!r}"
+            raise ValueError(
+                f"invalid JSON from Bedrock {context} response: {detail}; "
+                f"length={len(content)}; json_error={exc.msg} at line {exc.lineno} column {exc.colno}"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"invalid JSON from Bedrock {context} response: expected object, got {type(parsed).__name__}")
+        return parsed
 
     def _streaming_text_response(self, *, system_prompt: str, user_prompt: str) -> str:
         stream_handler = get_response_stream_handler()

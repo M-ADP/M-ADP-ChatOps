@@ -26,11 +26,17 @@ class EasterEggService:
     def decorate_response(self, message_text: str | None, response_text: str | None) -> str | None:
         if not isinstance(response_text, str) or not response_text.strip():
             return response_text
+        matched_text = self.response_text(message_text)
+        if matched_text is None:
+            return response_text
+        return f"{response_text.rstrip()}\n\n{matched_text}"
+
+    def response_text(self, message_text: str | None) -> str | None:
         matched_messages = [
             self.responses[name].strip()
             for name in self.match_names(message_text)
             if isinstance(self.responses.get(name), str) and self.responses[name].strip()
         ]
         if not matched_messages:
-            return response_text
-        return f"{response_text.rstrip()}\n\n" + "\n".join(matched_messages)
+            return None
+        return "\n".join(matched_messages)

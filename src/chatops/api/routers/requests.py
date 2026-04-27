@@ -225,6 +225,10 @@ def _decorate_final_response(message_text: str | None, final_response: str | Non
     return easter_egg_service.decorate_response(message_text=message_text, response_text=final_response)
 
 
+def _easter_egg_response(message_text: str | None) -> str | None:
+    return easter_egg_service.response_text(message_text)
+
+
 def _build_event_response(record) -> RequestEventResponse:
     payload = _load_json_field(record.payload)
     data = payload if isinstance(payload, dict) else {}
@@ -993,6 +997,53 @@ def create_request(
             _supersede_pending_request(superseded_request)
             db_session.flush()
         # UNKNOWN falls through to normal flow
+
+    easter_egg_response = _easter_egg_response(payload.message)
+    if easter_egg_response is not None:
+        request_id = IdGenerator.generate_sonyflake_id()
+        record = repo.create(
+            request_id=request_id,
+            session_id=session_id,
+            user_id=auth.user_id,
+            message_text=payload.message,
+            effective_message_text=payload.message,
+            request_type="inquiry",
+            requires_approval=False,
+        )
+        record.status = RequestStatus.COMPLETED.value
+        record.final_response = easter_egg_response
+        if superseded_request is not None:
+            _supersede_pending_request(superseded_request, replacement_request_id=record.id)
+        db_session.commit()
+        db_session.refresh(record)
+        event_service = EventService(db_session)
+        _append_request_created_event(event_service, record=record)
+        _append_context_hydrated_event(
+            event_service,
+            record=record,
+            session_context=session_context,
+        )
+        _append_structured_event(
+            event_service,
+            request_id=record.id,
+            session_id=record.session_id,
+            event_type="response.completed",
+            phase="response",
+            step="completed",
+            message="대화 응답을 생성했습니다.",
+            status_value=record.status,
+            progress=100,
+            payload={"final_response": record.final_response, "task": None},
+        )
+        _append_user_message(
+            db_session,
+            session_id=record.session_id,
+            request_id=record.id,
+            user_id=auth.user_id,
+            message_text=payload.message,
+        )
+        _sync_assistant_message(db_session, record)
+        return _build_request_response(record, record.message_text)
 
     graph_message_text = payload.message
     rewritten_follow_up = follow_up_interpreter.rewrite(

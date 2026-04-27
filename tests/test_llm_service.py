@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from chatops.services.llm import BedrockLLMService
 from chatops.services.response_streaming import response_stream_handler_context
@@ -183,6 +184,22 @@ def test_bedrock_llm_service_falls_back_on_error_for_classification() -> None:
     assert result["request_type"] == "query"
     assert result["intent"] == "query_status"
     assert "fallback" in result["classification_reason"].lower()
+
+
+def test_bedrock_llm_service_logs_clear_classification_json_decode_error(caplog) -> None:
+    client = FakeBedrockRuntimeClient(converse_response=_text_response(""))
+    service = BedrockLLMService(
+        model_id=MODEL_ID,
+        timeout_seconds=10,
+        client=client,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="chatops.services.llm"):
+        result = service.classify("조재민")
+
+    assert result["request_type"] == "query"
+    assert "invalid JSON from Bedrock classify response" in caplog.text
+    assert "empty response" in caplog.text
 
 
 def test_bedrock_llm_service_falls_back_on_error_for_query_interpretation() -> None:
