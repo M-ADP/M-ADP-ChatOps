@@ -38,6 +38,8 @@ class AgentState(TypedDict, total=False):
     approval_granted: bool | str
 
     # 추적
+    request_type: str | None
+    intent: str | None
     request_status: str
     executed_operations: list[dict[str, Any]]
     correction_attempts: int  # false completion 교정 시도 횟수

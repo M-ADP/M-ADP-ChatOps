@@ -251,6 +251,24 @@ def test_bedrock_llm_service_rejects_unsupported_inquiry_without_model_call() ->
     assert client.converse_stream_calls == []
 
 
+def test_bedrock_llm_service_passes_tool_choice_to_converse() -> None:
+    client = FakeBedrockRuntimeClient(converse_response=_text_response("ignored"))
+    service = BedrockLLMService(
+        model_id=MODEL_ID,
+        timeout_seconds=10,
+        client=client,
+    )
+
+    service.converse_with_tools(
+        messages=[{"role": "user", "content": [{"text": "트래픽 보여줘"}]}],
+        system_prompt="system",
+        tool_specs=[{"toolSpec": {"name": "monitoring__traffic", "inputSchema": {"json": {"type": "object"}}}}],
+        tool_choice={"any": {}},
+    )
+
+    assert client.converse_calls[0]["toolConfig"]["toolChoice"] == {"any": {}}
+
+
 def test_bedrock_llm_service_grounds_inquiry_fallback_on_registry_context() -> None:
     client = FakeBedrockRuntimeClient(converse_error=RuntimeError("rate limit"))
     service = BedrockLLMService(

@@ -117,6 +117,8 @@ class GraphService:
         org_id: str | None = None,
         session_context: dict[str, object] | None = None,
         request_id: int | None = None,
+        request_type: str | None = None,
+        intent: str | None = None,
         response_stream_handler: Callable[[str], None] | None = None,
     ) -> GraphResult:
         from chatops.graph.agent_state import AgentState
@@ -136,6 +138,8 @@ class GraphService:
                 {"role": "user", "content": [{"text": message_text}]},
             ],
             "session_context": session_context,
+            "request_type": request_type,
+            "intent": intent,
             "approval_granted": False,
             "request_status": "processing",
             "executed_operations": [],
@@ -209,7 +213,7 @@ class GraphService:
             status=status,
             request_type="agent",
             requires_approval=requires_approval,
-            intent="",
+            intent=str(state.get("intent") or ""),
             final_response=state.get("final_response"),
             selected_operation_ids=[
                 op["operation_id"]

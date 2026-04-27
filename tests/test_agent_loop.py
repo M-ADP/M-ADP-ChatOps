@@ -71,14 +71,17 @@ class FakeAgentLLMService:
     responses: list[dict[str, Any]] = field(default_factory=list)
     call_count: int = 0
     recorded_messages: list[list[dict[str, Any]]] = field(default_factory=list)
+    recorded_tool_choices: list[dict[str, Any] | None] = field(default_factory=list)
 
     def converse_with_tools(
         self,
         messages: list[dict[str, Any]],
         system_prompt: str,
         tool_specs: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.recorded_messages.append(list(messages))
+        self.recorded_tool_choices.append(tool_choice)
         if self.call_count < len(self.responses):
             response = self.responses[self.call_count]
         else:
@@ -275,6 +278,42 @@ def test_inquiry_completes_with_text_response() -> None:
     assert "프로젝트 생성" in result.final_response
     assert result.requires_approval is False
     assert llm.call_count == 1
+
+
+def test_query_request_forces_tool_choice_before_any_tool_execution() -> None:
+    """분류된 query 요청은 첫 reasoning 호출에서 도구 호출을 강제한다."""
+    llm = FakeAgentLLMService(responses=[
+        _text_response("트래픽을 확인했습니다."),
+    ])
+    service = _make_agent_service(llm=llm)
+
+    service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="api 트래픽 보여줘",
+        request_type="query",
+        intent="query_status",
+    )
+
+    assert llm.recorded_tool_choices[0] == {"any": {}}
+
+
+def test_inquiry_request_uses_auto_tool_choice() -> None:
+    """inquiry/chat 계열은 도구 호출을 강제하지 않는다."""
+    llm = FakeAgentLLMService(responses=[
+        _text_response("설명해드리겠습니다."),
+    ])
+    service = _make_agent_service(llm=llm)
+
+    service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="프로젝트 생성 방법 알려줘",
+        request_type="inquiry",
+        intent="answer_inquiry",
+    )
+
+    assert llm.recorded_tool_choices[0] == {"auto": {}}
 
 
 def test_inquiry_no_tool_calls_recorded() -> None:

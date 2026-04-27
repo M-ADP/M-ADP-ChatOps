@@ -242,6 +242,7 @@ class BedrockLLMService:
         messages: list[dict[str, Any]],
         system_prompt: str,
         tool_specs: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Bedrock Converse API를 tool 정의와 함께 호출한다.
 
@@ -261,7 +262,10 @@ class BedrockLLMService:
             **self._guardrail_kwargs(),
         }
         if tool_specs:
-            kwargs["toolConfig"] = {"tools": tool_specs}
+            tool_config: dict[str, Any] = {"tools": tool_specs}
+            if tool_choice is not None:
+                tool_config["toolChoice"] = tool_choice
+            kwargs["toolConfig"] = tool_config
 
         body = self.client.converse(**kwargs)
         return self._parse_converse_tool_response(body)
@@ -271,6 +275,7 @@ class BedrockLLMService:
         messages: list[dict[str, Any]],
         system_prompt: str,
         tool_specs: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """스트리밍 버전. 텍스트 청크는 stream_handler로 전달된다."""
         stream_handler = get_response_stream_handler()
@@ -282,7 +287,10 @@ class BedrockLLMService:
             **self._guardrail_kwargs(),
         }
         if tool_specs:
-            kwargs["toolConfig"] = {"tools": tool_specs}
+            tool_config: dict[str, Any] = {"tools": tool_specs}
+            if tool_choice is not None:
+                tool_config["toolChoice"] = tool_choice
+            kwargs["toolConfig"] = tool_config
 
         response = self.client.converse_stream(**kwargs)
 

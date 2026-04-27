@@ -125,6 +125,8 @@ class AsyncCommandStubGraphService(StubGraphService):
     def __init__(self, *, delay_seconds: float = 0.2, **kwargs) -> None:
         super().__init__(**kwargs)
         self.delay_seconds = delay_seconds
+        self.last_request_type: str | None = None
+        self.last_intent: str | None = None
 
     def preview_request(
         self,
@@ -147,6 +149,8 @@ class AsyncCommandStubGraphService(StubGraphService):
         org_id: str | None = None,
         session_context: dict[str, object] | None = None,
         request_id: int | None = None,
+        request_type: str | None = None,
+        intent: str | None = None,
         response_stream_handler=None,
     ) -> GraphResult:
         import time
@@ -154,6 +158,8 @@ class AsyncCommandStubGraphService(StubGraphService):
         del org_id, response_stream_handler
         self.last_session_context = session_context
         self.last_message_text = message_text
+        self.last_request_type = request_type
+        self.last_intent = intent
         time.sleep(self.delay_seconds)
         return GraphResult(
             request_id=request_id or self.next_request_id,
@@ -452,6 +458,47 @@ def test_create_request_returns_immediately_for_async_command_preview(db_session
     assert body["request_type"] == "command"
     assert persisted is not None
     assert persisted.status == "pending_approval"
+
+
+def test_async_request_passes_preview_classification_to_graph_handler(db_session) -> None:
+    app = create_app()
+    graph_stub = AsyncCommandStubGraphService(status="completed", requires_approval=False, delay_seconds=0.01)
+
+    def override_db_session():
+        yield db_session
+
+    def override_graph_service():
+        return graph_stub
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_graph_service] = override_graph_service
+
+    with TestClient(app) as client:
+        session = client.post(
+            "/chatops/sessions",
+            headers={"X-User-Id": "user-1"},
+            json={},
+        ).json()
+
+        response = client.post(
+            f"/chatops/sessions/{session['session_id']}/requests",
+            headers={"X-User-Id": "user-1"},
+            json={"message": "프로젝트 생성해줘"},
+        )
+        body = response.json()
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            db_session.expire_all()
+            persisted = RequestRepository(db_session).get_for_user(body["request_id"], "user-1")
+            if persisted is not None and persisted.status != "processing":
+                break
+            time.sleep(0.02)
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    assert graph_stub.last_request_type == "command"
+    assert graph_stub.last_intent == "execute_command"
 
 
 def test_request_responses_include_task_snapshot(db_session) -> None:

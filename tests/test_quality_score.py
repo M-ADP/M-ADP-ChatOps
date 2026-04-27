@@ -403,7 +403,9 @@ class GroundedFakeLLMService(FakeLLMService):
         messages: list[dict[str, Any]],
         system_prompt: str,
         tool_specs: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        del tool_choice
         from tests.test_graph_service import _text_response, _tool_use_response
 
         # Extract first user message text (for vague pattern detection)

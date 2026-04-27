@@ -60,7 +60,9 @@ class FakeLLMService:
         messages: list[dict[str, Any]],
         system_prompt: str,
         tool_specs: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        del tool_choice
         self._call_count += 1
 
         # tool_result가 마지막 메시지면 → 도구 실행 결과를 요약

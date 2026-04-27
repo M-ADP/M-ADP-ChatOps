@@ -21,7 +21,8 @@ from tests.test_agent_loop import (
 
 @dataclass
 class _FakeLLMService:
-    def converse_with_tools(self, messages, system_prompt, tool_specs):
+    def converse_with_tools(self, messages, system_prompt, tool_specs, tool_choice=None):
+        del tool_choice
         return {
             "stop_reason": "end_turn",
             "assistant_message": {"role": "assistant", "content": [{"text": "응답"}]},

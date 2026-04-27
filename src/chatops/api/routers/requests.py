@@ -183,6 +183,8 @@ def _invoke_graph_handle_request(
     user_role: str | None,
     session_context: dict[str, object] | None,
     request_id: int | None = None,
+    request_type: str | None = None,
+    intent: str | None = None,
     response_stream_handler=None,
 ):
     kwargs = {
@@ -194,6 +196,10 @@ def _invoke_graph_handle_request(
     }
     if request_id is not None and _supports_parameter(graph_service.handle_request, "request_id"):
         kwargs["request_id"] = request_id
+    if request_type is not None and _supports_parameter(graph_service.handle_request, "request_type"):
+        kwargs["request_type"] = request_type
+    if intent is not None and _supports_parameter(graph_service.handle_request, "intent"):
+        kwargs["intent"] = intent
     if response_stream_handler is not None and _supports_parameter(
         graph_service.handle_request, "response_stream_handler"
     ):
@@ -740,6 +746,8 @@ def _process_async_request(
     user_role: str | None,
     message_text: str,
     session_context: dict[str, object] | None,
+    request_type: str | None = None,
+    intent: str | None = None,
 ) -> None:
     worker_session = session_factory()
     try:
@@ -774,6 +782,8 @@ def _process_async_request(
             user_role=user_role,
             session_context=session_context,
             request_id=request_id,
+            request_type=request_type,
+            intent=intent,
             response_stream_handler=on_response_chunk,
         )
 
@@ -1167,6 +1177,8 @@ def create_request(
                 "user_role": auth.user_role,
                 "message_text": graph_message_text,
                 "session_context": session_context,
+                "request_type": request_type,
+                "intent": str(preview.get("intent") or ""),
             },
             daemon=True,
         ).start()
@@ -1182,6 +1194,8 @@ def create_request(
             user_role=auth.user_role,
             session_context=session_context,
             request_id=request_id,
+            request_type=None,
+            intent=None,
         )
     except Exception:
         logger.exception("Sync request processing failed for request_id=%s", request_id)

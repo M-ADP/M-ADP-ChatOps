@@ -73,6 +73,13 @@ _AGENT_SYSTEM_PROMPT = """당신은 클라우드 인프라 운영을 지원하�
 
 _MAX_CORRECTION_ATTEMPTS = 2
 
+_TOOL_REQUIRED_REQUEST_TYPES = {"query", "command"}
+_TOOL_REQUIRED_INTENTS = {
+    "query_status",
+    "execute_command",
+    "provision_application",
+}
+
 _FALSE_COMPLETION_PATTERNS = (
     "생성됐습니다", "생성되었습니다", "만들어졌습니다", "만들었습니다",
     "삭제됐습니다", "삭제되었습니다", "지워졌습니다",
@@ -93,6 +100,18 @@ def _is_false_completion(text: str, executed_operations: list[dict[str, Any]]) -
     if executed_operations:  # 툴을 한 번이라도 호출했으면 신뢰
         return False
     return any(pattern in text for pattern in _FALSE_COMPLETION_PATTERNS)
+
+
+def _tool_choice_for_state(state: AgentState) -> dict[str, Any]:
+    executed_operations = list(state.get("executed_operations", []))
+    request_type = str(state.get("request_type") or "")
+    intent = str(state.get("intent") or "")
+    if (
+        not executed_operations
+        and (request_type in _TOOL_REQUIRED_REQUEST_TYPES or intent in _TOOL_REQUIRED_INTENTS)
+    ):
+        return {"any": {}}
+    return {"auto": {}}
 
 
 def _get_content(message: Any) -> list[Any]:
@@ -216,18 +235,21 @@ class AgentGraph:
             self.registry_service.all_enabled_entries()
         )
         messages = list(state.get("messages", []))
+        tool_choice = _tool_choice_for_state(state)
 
         if get_response_stream_handler() is not None:
             response = self.llm_service.converse_with_tools_stream(
                 messages=messages,
                 system_prompt=_AGENT_SYSTEM_PROMPT,
                 tool_specs=tool_specs,
+                tool_choice=tool_choice,
             )
         else:
             response = self.llm_service.converse_with_tools(
                 messages=messages,
                 system_prompt=_AGENT_SYSTEM_PROMPT,
                 tool_specs=tool_specs,
+                tool_choice=tool_choice,
             )
 
         assistant_message = response["assistant_message"]
