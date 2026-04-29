@@ -161,11 +161,13 @@ class RegistryService:
         entries: list[RegistryEntry],
         minimum_score_threshold: int = 8,
         ambiguity_score_threshold: int = 5,
+        semantic_router: Any = None,
     ) -> None:
         self.entries = tuple(entries)
         self.entries_by_id = {entry.id: entry for entry in self.entries}
         self.minimum_score_threshold = minimum_score_threshold
         self.ambiguity_score_threshold = ambiguity_score_threshold
+        self._semantic_router = semantic_router
 
     @classmethod
     def from_directory(
@@ -173,16 +175,25 @@ class RegistryService:
         directory: str | Path,
         minimum_score_threshold: int = 8,
         ambiguity_score_threshold: int = 5,
+        use_semantic_router: bool = True,
     ) -> "RegistryService":
         root = Path(directory)
         entries = [
             RegistryEntry.from_dict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
             for path in sorted(root.glob("*.ai.yaml"))
         ]
+        router = None
+        if use_semantic_router:
+            try:
+                from chatops.services.semantic_router import SemanticRouter
+            except ImportError:
+                from src.chatops.services.semantic_router import SemanticRouter  # type: ignore[no-redef]
+            router = SemanticRouter.from_registry(entries)
         return cls(
             entries,
             minimum_score_threshold=minimum_score_threshold,
             ambiguity_score_threshold=ambiguity_score_threshold,
+            semantic_router=router,
         )
 
     def find_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[RegistryEntry]:
@@ -195,11 +206,12 @@ class RegistryService:
     ) -> list[ScoredCandidate]:
         """P1: threshold 적용 + 점수 포함 후보 반환."""
         filtered = [entry for entry in self.entries if self._matches_mode(entry, usable_in)]
+        # user_text 임베딩은 entry 순회 전에 1회만 계산한다
+        user_vec = self._semantic_router.embed_text(user_text) if self._semantic_router else None
         scored = sorted(
-            [(entry, self._score(entry, user_text)) for entry in filtered],
+            [(entry, self._score(entry, user_text, user_vec=user_vec)) for entry in filtered],
             key=lambda pair: (-pair[1], pair[0].id),
         )
-        # P1: minimum_score_threshold 미달 후보 제외
         above_threshold = [
             ScoredCandidate(entry=entry, score=score)
             for entry, score in scored
@@ -250,7 +262,7 @@ class RegistryService:
             return False
         return True
 
-    def _score(self, entry: RegistryEntry, user_text: str) -> int:
+    def _score(self, entry: RegistryEntry, user_text: str, user_vec: list[float] | None = None) -> int:
         query_tokens = self._expand_tokens(self._tokenize(user_text))
         entry_tokens = self._expand_tokens(self._tokenize(entry.searchable_text()))
         id_tokens = self._expand_tokens(self._tokenize(entry.id))
@@ -263,46 +275,43 @@ class RegistryService:
         id_overlap = query_tokens & id_tokens
         capability_overlap = query_tokens & capability_tokens
         required_input_score = self._score_required_inputs(entry, supplied_fields)
-        semantic_bonus = self._semantic_bonus(entry, user_text)
+        semantic_bonus = self._semantic_bonus(entry, user_text, user_vec=user_vec)
         return len(overlap) + (len(id_overlap) * 3) + (len(capability_overlap) * 2) + required_input_score + semantic_bonus
 
-    def _semantic_bonus(self, entry: RegistryEntry, user_text: str) -> int:
+    def _semantic_bonus(self, entry: RegistryEntry, user_text: str, user_vec: list[float] | None = None) -> int:
+        """Positive bonus는 SemanticRouter 사용 시 임베딩 기반, 미사용 시 keyword fallback."""
+        score = 0
+        if self._semantic_router is not None and user_vec is not None:
+            score += self._semantic_router.score_bonus(user_vec, entry.id)
+        else:
+            score += self._keyword_positive_bonus(entry, user_text)
+        score += self._keyword_negative_penalty(entry, user_text)
+        return score
+
+    def _keyword_positive_bonus(self, entry: RegistryEntry, user_text: str) -> int:
+        """키워드 기반 positive bonus (SemanticRouter 미사용 시 fallback)."""
         score = 0
         if self._is_invitation_list_request(user_text):
             if entry.id == "project.list_member_invitations":
                 score += 24
-            elif entry.id in {"project.list_members", "project.list_projects"}:
-                score -= 4
         if self._is_member_list_request(user_text):
             if entry.id == "project.list_members":
                 score += 18
-            elif entry.id == "project.list_projects":
-                score -= 4
         if self._is_member_add_request(user_text):
             if entry.id == "project.invite_member":
                 score += 24
-            elif entry.id in {"project.create", "project.delete", "project.remove_member", "project.transfer_ownership"}:
-                score -= 8
         if self._is_member_remove_request(user_text):
             if entry.id == "project.remove_member":
                 score += 24
-            elif entry.id in {"project.delete", "project.create", "project.invite_member", "project.transfer_ownership"}:
-                score -= 8
         if self._is_transfer_ownership_request(user_text):
             if entry.id == "project.transfer_ownership":
                 score += 24
-            elif entry.id in {"project.delete", "project.create", "project.invite_member", "project.remove_member"}:
-                score -= 8
         if self._is_resource_limit_request(user_text):
             if entry.id == "project.get_resource_limit":
                 score += 18
-            elif entry.id == "project.list_projects":
-                score -= 4
         if self._is_project_list_request(user_text):
             if entry.id == "project.list_projects":
                 score += 12
-            elif entry.id == "project.get":
-                score -= 8
         if self._is_owner_check_request(user_text):
             if entry.id == "project.check_owner":
                 score += 18
@@ -312,42 +321,26 @@ class RegistryService:
         if self._is_project_detail_request(user_text):
             if entry.id == "project.get":
                 score += 14
-            elif entry.id == "project.list_projects":
-                score -= 2
         if self._is_app_list_request(user_text):
             if entry.id == "application.get_apps":
                 score += 18
-            elif entry.id == "project.list_projects":
-                score -= 4
         if self._is_app_status_request(user_text):
             if entry.id == "application.get_apps_status":
                 score += 18
-            elif entry.id == "monitoring.get_app_deployment_traffic":
-                score -= 8
         if self._is_app_logs_request(user_text):
             if entry.id == "application.get_apps_logs":
                 score += 18
-            elif entry.id == "monitoring.get_app_deployment_traffic":
-                score -= 8
         if self._is_app_details_request(user_text):
             if entry.id == "application.get_apps_details":
                 score += 18
-            elif entry.id == "monitoring.get_app_deployment_traffic":
-                score -= 8
         if self._is_name_update_request(user_text):
             if entry.id == "project.update_name":
                 score += 8
-            elif "resource" in entry.id:
-                score -= 4
         if self._is_resource_update_request(user_text):
             if entry.id == "project.update_resource":
                 score += 14
             elif entry.id == "application.patch_apps_resources" and self._has_application_context(user_text):
                 score += 14
-            elif entry.id in {"project.create", "project.update_name"}:
-                score -= 6
-            elif entry.operation_kind == "delete":
-                score -= 10
         if self._is_create_request(user_text):
             has_project_context = self._has_project_context(user_text)
             has_application_context = self._has_application_context(user_text)
@@ -355,12 +348,6 @@ class RegistryService:
                 score += 12
             elif entry.id == "project.create" and has_project_context and not has_application_context:
                 score += 12
-            elif entry.id == "project.create" and has_application_context:
-                score -= 12
-            elif entry.operation_kind == "delete":
-                score -= 8
-            elif entry.id in {"application.patch_apps_github", "application.patch_apps_resources", "project.update_resource"}:
-                score -= 4
         if self._is_delete_request(user_text) and entry.operation_kind == "delete":
             score += 6
             has_application_context = self._has_application_context(user_text)
@@ -368,12 +355,71 @@ class RegistryService:
                 score += 8
             if entry.id == "project.delete" and self._has_project_context(user_text):
                 score += 4
-            if entry.id == "project.delete" and has_application_context:
-                score -= 10
         if self._is_github_update_request(user_text):
             if entry.id == "application.patch_apps_github":
                 score += 16
+        return score
+
+    def _keyword_negative_penalty(self, entry: RegistryEntry, user_text: str) -> int:
+        """키워드 기반 negative penalty (SemanticRouter 사용 여부와 무관하게 항상 적용)."""
+        score = 0
+        if self._is_invitation_list_request(user_text):
+            if entry.id in {"project.list_members", "project.list_projects"}:
+                score -= 4
+        if self._is_member_list_request(user_text):
+            if entry.id == "project.list_projects":
+                score -= 4
+        if self._is_member_add_request(user_text):
+            if entry.id in {"project.create", "project.delete", "project.remove_member", "project.transfer_ownership"}:
+                score -= 8
+        if self._is_member_remove_request(user_text):
+            if entry.id in {"project.delete", "project.create", "project.invite_member", "project.transfer_ownership"}:
+                score -= 8
+        if self._is_transfer_ownership_request(user_text):
+            if entry.id in {"project.delete", "project.create", "project.invite_member", "project.remove_member"}:
+                score -= 8
+        if self._is_resource_limit_request(user_text):
+            if entry.id == "project.list_projects":
+                score -= 4
+        if self._is_project_list_request(user_text):
+            if entry.id == "project.get":
+                score -= 8
+        if self._is_project_detail_request(user_text):
+            if entry.id == "project.list_projects":
+                score -= 2
+        if self._is_app_list_request(user_text):
+            if entry.id == "project.list_projects":
+                score -= 4
+        if self._is_app_status_request(user_text):
+            if entry.id == "monitoring.get_app_deployment_traffic":
+                score -= 8
+        if self._is_app_logs_request(user_text):
+            if entry.id == "monitoring.get_app_deployment_traffic":
+                score -= 8
+        if self._is_app_details_request(user_text):
+            if entry.id == "monitoring.get_app_deployment_traffic":
+                score -= 8
+        if self._is_name_update_request(user_text):
+            if "resource" in entry.id:
+                score -= 4
+        if self._is_resource_update_request(user_text):
+            if entry.id in {"project.create", "project.update_name"}:
+                score -= 6
             elif entry.operation_kind == "delete":
+                score -= 10
+        if self._is_create_request(user_text):
+            has_application_context = self._has_application_context(user_text)
+            if entry.id == "project.create" and has_application_context:
+                score -= 12
+            elif entry.operation_kind == "delete":
+                score -= 8
+            elif entry.id in {"application.patch_apps_github", "application.patch_apps_resources", "project.update_resource"}:
+                score -= 4
+        if self._is_delete_request(user_text) and entry.operation_kind == "delete":
+            if entry.id == "project.delete" and self._has_application_context(user_text):
+                score -= 10
+        if self._is_github_update_request(user_text):
+            if entry.operation_kind == "delete":
                 score -= 8
         return score
 
