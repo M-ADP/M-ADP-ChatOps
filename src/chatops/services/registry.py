@@ -196,6 +196,40 @@ class RegistryService:
             semantic_router=router,
         )
 
+    # Agent가 쓰기 작업 전에 항상 호출해야 하는 precheck 도구.
+    # 사용자 쿼리 텍스트에 관련 키워드가 없어도 점수를 못 받으므로 항상 포함한다.
+    _ALWAYS_INCLUDED_AGENT_TOOLS: frozenset[str] = frozenset({"project.check_available"})
+
+    def find_agent_candidates(self, user_text: str, limit: int = 8) -> list[RegistryEntry]:
+        """Agent Loop용 도구 후보 필터링.
+
+        SemanticRouter 사용 가능 시: 코사인 유사도 기반으로 limit개까지 필터링.
+        미사용 시(keyword fallback): 전체 enabled entries 반환 (필터 효과 미미하므로).
+        두 경우 모두 _ALWAYS_INCLUDED_AGENT_TOOLS는 항상 포함한다.
+        """
+        all_enabled = list(self.all_enabled_entries())
+
+        if self._semantic_router is None:
+            return all_enabled
+
+        user_vec = self._semantic_router.embed_text(user_text) if user_text.strip() else None
+        if user_vec is None:
+            return all_enabled
+
+        scored = sorted(
+            [(entry, self._score(entry, user_text, user_vec=user_vec)) for entry in all_enabled],
+            key=lambda pair: (-pair[1], pair[0].id),
+        )
+        candidates = [entry for entry, score in scored if score >= self.minimum_score_threshold][:limit]
+
+        # 항상 포함해야 하는 도구가 candidates에 없으면 추가
+        candidate_ids = {e.id for e in candidates}
+        for tool_id in self._ALWAYS_INCLUDED_AGENT_TOOLS:
+            if tool_id not in candidate_ids and tool_id in self.entries_by_id:
+                candidates.append(self.entries_by_id[tool_id])
+
+        return candidates if candidates else all_enabled
+
     def find_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[RegistryEntry]:
         """점수 기준으로 후보를 반환한다. threshold 미달 후보는 제외."""
         scored = self.find_scored_candidates(user_text, usable_in, limit)
