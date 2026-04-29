@@ -268,25 +268,30 @@ class RegistryService:
 
     def _semantic_bonus(self, entry: RegistryEntry, user_text: str) -> int:
         score = 0
+        if self._is_invitation_list_request(user_text):
+            if entry.id == "project.list_member_invitations":
+                score += 24
+            elif entry.id in {"project.list_members", "project.list_projects"}:
+                score -= 4
         if self._is_member_list_request(user_text):
             if entry.id == "project.list_members":
                 score += 18
             elif entry.id == "project.list_projects":
                 score -= 4
         if self._is_member_add_request(user_text):
-            if entry.id == "project.add_member":
+            if entry.id == "project.invite_member":
                 score += 24
             elif entry.id in {"project.create", "project.delete", "project.remove_member", "project.transfer_ownership"}:
                 score -= 8
         if self._is_member_remove_request(user_text):
             if entry.id == "project.remove_member":
                 score += 24
-            elif entry.id in {"project.delete", "project.create", "project.add_member", "project.transfer_ownership"}:
+            elif entry.id in {"project.delete", "project.create", "project.invite_member", "project.transfer_ownership"}:
                 score -= 8
         if self._is_transfer_ownership_request(user_text):
             if entry.id == "project.transfer_ownership":
                 score += 24
-            elif entry.id in {"project.delete", "project.create", "project.add_member", "project.remove_member"}:
+            elif entry.id in {"project.delete", "project.create", "project.invite_member", "project.remove_member"}:
                 score -= 8
         if self._is_resource_limit_request(user_text):
             if entry.id == "project.get_resource_limit":
@@ -400,14 +405,27 @@ class RegistryService:
             marker in lowered for marker in update_markers
         )
 
+    def _is_invitation_list_request(self, user_text: str) -> bool:
+        has_invite_ctx = any(marker in user_text for marker in ("초대", "invitation"))
+        has_list_marker = any(marker in user_text for marker in ("목록", "리스트", "보여", "조회", "현황"))
+        return has_invite_ctx and has_list_marker
+
     def _is_member_list_request(self, user_text: str) -> bool:
         return "멤버" in user_text and any(marker in user_text for marker in ("목록", "리스트", "보여", "조회"))
 
     def _is_member_add_request(self, user_text: str) -> bool:
-        return "멤버" in user_text and any(marker in user_text for marker in ("추가", "넣어", "초대"))
+        has_member_ctx = "멤버" in user_text or "구성원" in user_text
+        has_add_marker = any(marker in user_text for marker in ("추가", "넣어", "초대"))
+        # "user1 추가하고 user2도 추가" 처럼 멤버 키워드 없이 여러 사람을 추가하는 패턴
+        has_multi_add = has_add_marker and any(marker in user_text for marker in ("하고", "도 추가", "도추가"))
+        return has_add_marker and (has_member_ctx or has_multi_add)
 
     def _is_member_remove_request(self, user_text: str) -> bool:
-        return "멤버" in user_text and any(marker in user_text for marker in ("제거", "삭제", "지워", "빼"))
+        has_member_ctx = "멤버" in user_text or "구성원" in user_text
+        has_remove_marker = any(marker in user_text for marker in ("제거", "삭제", "지워", "빼", "강퇴", "퇴출"))
+        # "강퇴" 같은 동사 자체가 멤버 제거를 의미하므로 멤버 키워드 없어도 인정
+        is_kick_verb = any(marker in user_text for marker in ("강퇴", "퇴출"))
+        return has_remove_marker and (has_member_ctx or is_kick_verb)
 
     def _is_transfer_ownership_request(self, user_text: str) -> bool:
         lowered = user_text.lower()

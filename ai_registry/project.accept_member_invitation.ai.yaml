@@ -1,0 +1,55 @@
+id: project.accept_member_invitation
+source_file: apis/project.yaml
+operation_id: accept_project_member_invitation_endpoint_projects__project_id__member_invitations__invitation_id__accept_post
+path: /projects/{project_id}/member-invitations/{invitation_id}/accept
+method: POST
+summary: 멤버 초대를 수락하여 프로젝트에 합류한다
+capability: 프로젝트 멤버 초대 수락 (초대 링크 없이 오퍼레이터가 대신 수락)
+usable_in:
+- command
+operation_kind: write
+when_to_use:
+- 운영자가 특정 초대를 즉시 수락 처리할 때
+- '초대 수락, 초대 승인, 합류 처리 등의 표현이 쓰일 때'
+when_not_to_use:
+- 일반적으로 초대는 사용자가 이메일 링크로 직접 수락함
+- 새 초대를 보내려면 project.invite_member를 사용
+requires_confirmation: true
+risk_level: medium
+side_effects:
+- 대상 사용자가 즉시 프로젝트 멤버가 됨
+required_headers:
+- X-User-Id
+- X-User-Role
+required_inputs:
+  headers:
+  - name: X-User-Id
+    required: true
+    type: string
+    description: 사용자 식별자
+  - name: X-User-Role
+    required: true
+    type: string
+    description: 사용자 역할
+  path:
+  - name: project_id
+    required: true
+    type: integer
+  - name: invitation_id
+    required: true
+    type: integer
+  query: []
+  body: null
+preconditions:
+- 대상 프로젝트와 수락할 초대 ID가 필요합니다.
+missing_info_questions:
+- 어느 프로젝트의 초대를 수락할까요?
+- 어떤 초대를 수락할까요? (초대 ID 또는 대상 사용자 닉네임)
+response_interpretation: 초대가 수락됐고 해당 사용자가 프로젝트 멤버가 됐음을 안내합니다.
+plan_template:
+- 수락할 초대를 확인합니다.
+- 수락 전 사용자에게 영향을 설명하고 승인을 받습니다.
+- 수락 결과를 요약합니다.
+examples:
+- "myapp 프로젝트 jaemin 초대 수락 처리해줘"
+- "bang 프로젝트 초대 ID 5 수락해줘"

@@ -78,6 +78,9 @@ class PrecheckService:
                         project_id=self._coerce_optional_int(resolved_ids.get("project_id")),
                     )
                 )
+                if result.get("disambiguation_required"):
+                    # 부분적으로 resolve된 ids(project_id 등)를 함께 전달해 safety_gate가 활용할 수 있게 한다.
+                    return {**result, "resolved_ids": resolved_ids}
                 if result.get("error"):
                     return result
                 resolved_ids["target_user_id"] = result["user_id"]
@@ -178,7 +181,38 @@ class PrecheckService:
                 project_id=project_id,
             )
             if members.get("success") is not False:
-                matched = match_user(nickname, members.get("items", []))
+                items = members.get("items", [])
+                # 동명이인 감지: 쿼리와 정확히 일치하는 닉네임/유저명이 2명 이상이면 중의성 오류
+                ambiguous = [
+                    item for item in items
+                    if isinstance(item, dict) and any(
+                        str(item.get(field) or "").strip() == nickname
+                        for field in ("nickname", "username", "canonical_name")
+                    )
+                ]
+                if len(ambiguous) > 1:
+                    candidates = []
+                    lines = []
+                    for item in ambiguous:
+                        display = next(
+                            (str(item.get(f) or "").strip() for f in ("nickname", "canonical_name", "username") if item.get(f)),
+                            nickname,
+                        )
+                        uid = item.get("user_id") or item.get("id") or item.get("resolved_id")
+                        candidates.append({"display": display, "user_id": uid})
+                        lines.append(f"- {display}" + (f" (ID: {uid})" if uid else ""))
+                    # LLM을 거치지 않고 상태 머신이 직접 처리해야 하는 중의성 오류.
+                    # safety_gate가 이를 감지해 interrupt()로 선택지 UI를 프론트에 전달한다.
+                    return {
+                        "error": (
+                            f"'{nickname}'에 해당하는 사용자가 여러 명입니다:\n"
+                            + "\n".join(lines)
+                            + "\n정확한 ID나 고유한 닉네임으로 다시 요청해주세요."
+                        ),
+                        "disambiguation_required": True,
+                        "candidates": candidates,
+                    }
+                matched = match_user(nickname, items)
                 if matched.user_id is not None:
                     return {"error": None, "user_id": matched.user_id}
                 suggestions = matched.suggestions
@@ -208,7 +242,7 @@ class PrecheckService:
     @staticmethod
     def _operation_needs_target_user(operation_id: str) -> bool:
         return operation_id in {
-            "project.add_member",
+            "project.invite_member",
             "project.remove_member",
             "project.transfer_ownership",
         }

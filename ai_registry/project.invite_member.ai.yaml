@@ -1,24 +1,26 @@
-id: project.add_member
+id: project.invite_member
 source_file: apis/project.yaml
 operation_id: add_project_member_endpoint_projects__project_id__members_post
 path: /projects/{project_id}/members
 method: POST
-summary: 프로젝트에 멤버(사용자)를 추가한다
-capability: 프로젝트 멤버 추가 (특정 사용자를 구성원으로 등록)
+summary: 프로젝트에 멤버를 초대한다 (이메일 초대장 발송)
+capability: 프로젝트 멤버 초대 (이메일 링크로 사용자 초대, 수락 후 합류)
 usable_in:
 - command
 operation_kind: write
 when_to_use:
-- 프로젝트에 새 멤버를 참여시킬 때
+- 프로젝트에 새 멤버를 초대할 때
 - '멤버 추가, 누구 초대해줘, 팀에 넣어줘 등의 표현이 쓰일 때'
 when_not_to_use:
 - 멤버를 빼려면 project.remove_member를 사용
 - 멤버 목록을 보려면 project.list_members를 사용
 - 소유권을 이전하려면 project.transfer_ownership을 사용
+- 초대 현황을 보려면 project.list_member_invitations를 사용
 requires_confirmation: true
 risk_level: medium
 side_effects:
-- 대상 사용자가 프로젝트에 접근할 수 있게 됨
+- 대상 사용자에게 이메일 초대장이 발송됨
+- 사용자가 수락해야 프로젝트 멤버가 됨 (즉시 추가되지 않음)
 required_headers:
 - X-User-Id
 - X-User-Role
@@ -45,16 +47,16 @@ required_inputs:
     required_fields:
     - user_id
 preconditions:
-- 대상 프로젝트와 추가할 사용자 식별자가 필요합니다.
+- 대상 프로젝트와 초대할 사용자 식별자가 필요합니다.
 missing_info_questions:
-- 어느 프로젝트에 멤버를 추가할까요?
-- 추가할 사용자는 누구인가요? (사용자 ID 또는 사용자명)
-response_interpretation: 추가된 멤버의 사용자명과 프로젝트 이름을 사용자에게 요약합니다.
+- 어느 프로젝트에 멤버를 초대할까요?
+- 초대할 사용자는 누구인가요? (사용자 ID 또는 닉네임)
+response_interpretation: 초대장이 발송됐으며 대상 사용자의 수락을 기다린다고 안내합니다. '멤버로 추가됐습니다' 표현은 사용하지 않습니다.
 plan_template:
-- 대상 프로젝트와 추가 대상 사용자를 확인합니다.
-- 추가 전 사용자에게 영향을 설명하고 승인을 받습니다.
-- 추가 결과를 요약합니다.
+- 대상 프로젝트와 초대 대상 사용자를 확인합니다.
+- 이메일 초대장 발송 사실을 사용자에게 설명하고 승인을 받습니다.
+- 초대 발송 결과를 요약합니다.
 examples:
-- "bang 프로젝트에 jaemin 추가해줘"
-- "test 프로젝트에 홍길동 초대"
+- "bang 프로젝트에 jaemin 초대해줘"
+- "test 프로젝트에 홍길동 추가해줘"
 - "myproject 팀에 user123 넣어줘"

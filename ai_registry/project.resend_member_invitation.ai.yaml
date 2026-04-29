@@ -1,0 +1,52 @@
+id: project.resend_member_invitation
+source_file: apis/project.yaml
+operation_id: resend_project_member_invitation_endpoint_projects__project_id__member_invitations__invitation_id__resend_post
+path: /projects/{project_id}/member-invitations/{invitation_id}/resend
+method: POST
+summary: 멤버 초대 이메일을 재발송한다
+capability: 프로젝트 멤버 초대 재발송 (초대 이메일 다시 보내기)
+usable_in:
+- command
+operation_kind: write
+when_to_use:
+- 초대 이메일을 받지 못했거나 만료된 초대를 재발송할 때
+- '초대 재발송, 초대 다시 보내, 이메일 재전송 등의 표현이 쓰일 때'
+when_not_to_use:
+- 새 초대는 project.invite_member를 사용
+- 초대 취소는 project.cancel_member_invitation을 사용
+requires_confirmation: false
+risk_level: low
+side_effects:
+- 대상 사용자에게 초대 이메일이 다시 발송됨
+required_headers:
+- X-User-Id
+- X-User-Role
+required_inputs:
+  headers:
+  - name: X-User-Id
+    required: true
+    type: string
+    description: 사용자 식별자
+  - name: X-User-Role
+    required: true
+    type: string
+    description: 사용자 역할
+  path:
+  - name: project_id
+    required: true
+    type: integer
+  - name: invitation_id
+    required: true
+    type: integer
+  query: []
+  body: null
+preconditions:
+- 재발송할 초대의 프로젝트와 초대 ID가 필요합니다.
+missing_info_questions:
+- 어느 프로젝트의 초대를 재발송할까요?
+- 어떤 초대를 재발송할까요? (대상 사용자 닉네임 또는 초대 ID)
+response_interpretation: 초대 이메일이 재발송됐음을 안내합니다.
+plan_template: []
+examples:
+- "myapp 프로젝트 jaemin 초대 이메일 다시 보내줘"
+- "bang 프로젝트 초대 재발송해줘"
