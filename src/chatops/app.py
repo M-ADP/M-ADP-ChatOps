@@ -11,7 +11,7 @@ from chatops.common.logging.audit import AuditLogMiddleware
 logger = logging.getLogger(__name__)
 
 _SHUTDOWN_THREAD_JOIN_TIMEOUT = 30.0
-_MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "migrations"
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 
 def _run_migrations() -> None:
