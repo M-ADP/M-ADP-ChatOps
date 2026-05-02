@@ -24,7 +24,7 @@ def _run_migrations() -> None:
         alembic_cfg.set_main_option("script_location", str(_MIGRATIONS_DIR))
 
         from chatops.common.config.settings import get_db_config
-        alembic_cfg.set_main_option("sqlalchemy.url", get_db_config().url)
+        alembic_cfg.set_main_option("sqlalchemy.url", get_db_config().url.replace("%", "%%"))
 
         command.upgrade(alembic_cfg, "head")
         logger.info("alembic upgrade head completed")
