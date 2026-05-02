@@ -44,6 +44,7 @@ _AGENT_SYSTEM_PROMPT = """당신은 클라우드 인프라 운영을 지원하�
 규칙:
 - 사용자 요청에 맞는 도구를 선택하여 호출하세요.
 - 여러 단계가 필요하면 도구를 순서대로 호출하세요. 이전 도구의 결과를 참고하여 다음 도구를 호출하세요.
+- 한 번에 도구를 하나만 호출하세요. 여러 도구를 동시에 호출하지 마세요.
 - 도구 결과를 한국어로 자연스럽게 요약하여 전달하세요.
 - 지원하지 않는 기능은 솔직하게 안 된다고 설명하고, 가능한 대안이 있으면 제안하세요.
 - 도구 호출 시 사용자가 제공한 정보를 최대한 활용하세요.
@@ -265,9 +266,15 @@ def _sanitize_assistant_message(message: Any) -> Any:
                 text = block.get("text")
                 if not isinstance(text, str) or not text.strip():
                     continue
-            # 두 번째 이후의 toolUse 제거
+            # 두 번째 이후의 toolUse 제거 (silent partial execution 방지)
             if "toolUse" in block:
                 if tool_use_seen:
+                    dropped_name = block.get("toolUse", {}).get("name", "unknown")
+                    logger.warning(
+                        "parallel_tool_use_dropped: LLM returned multiple toolUse blocks; "
+                        "dropping '%s' (only first tool call per turn is supported)",
+                        dropped_name,
+                    )
                     continue
                 tool_use_seen = True
         sanitized.append(block)
@@ -438,6 +445,16 @@ class AgentGraph:
         # Nova 2 Lite는 toolUse와 함께 빈 text 블록을 반환하는 경우가 있어,
         # 다음 turn의 messages에 그대로 누적되면 Bedrock이 ValidationException을 던진다.
         assistant_message = _sanitize_assistant_message(response["assistant_message"])
+        usage = response.get("usage") or {}
+        if usage.get("input_tokens") or usage.get("output_tokens"):
+            logger.info("bedrock_token_usage %s", json.dumps({
+                "request_id": state.get("request_id"),
+                "session_id": state.get("session_id"),
+                "user_id": state.get("user_id"),
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "iteration": iteration_count,
+            }, ensure_ascii=False))
         updates: dict[str, Any] = {
             "messages": [assistant_message],
         }
@@ -804,8 +821,15 @@ class AgentGraph:
 
     @staticmethod
     def _run_awaitable(awaitable, timeout_seconds: float = 30.0):
+        import concurrent.futures
         try:
             asyncio.get_running_loop()
+            # 이미 이벤트 루프가 실행 중 (async 환경) → 별도 스레드에서 새 루프 생성
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(
+                    asyncio.run,
+                    asyncio.wait_for(awaitable, timeout=timeout_seconds),
+                ).result(timeout=timeout_seconds + 5)
         except RuntimeError:
+            # 이벤트 루프 없음 (sync FastAPI route 스레드) → 직접 실행
             return asyncio.run(asyncio.wait_for(awaitable, timeout=timeout_seconds))
-        raise RuntimeError("async downstream 호출은 현재 sync workflow에서만 지원합니다.")

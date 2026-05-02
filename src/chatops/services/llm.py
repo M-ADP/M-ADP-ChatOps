@@ -300,6 +300,7 @@ class BedrockLLMService:
         current_tool_use: dict[str, Any] | None = None
         current_tool_input_json = ""
         stop_reason = "end_turn"
+        stream_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
         for chunk in response["stream"]:
             # 텍스트 델타
@@ -344,6 +345,16 @@ class BedrockLLMService:
             if isinstance(message_stop, dict):
                 stop_reason = message_stop.get("stopReason", "end_turn")
 
+            # 토큰 사용량 (스트림 마지막 metadata 이벤트)
+            metadata = chunk.get("metadata")
+            if isinstance(metadata, dict):
+                usage_raw = metadata.get("usage", {})
+                if usage_raw:
+                    stream_usage = {
+                        "input_tokens": int(usage_raw.get("inputTokens", 0)),
+                        "output_tokens": int(usage_raw.get("outputTokens", 0)),
+                    }
+
         # assistant 메시지 조립
         content_blocks: list[dict[str, Any]] = []
         combined_text = "".join(text_parts).strip()
@@ -366,6 +377,7 @@ class BedrockLLMService:
             },
             "tool_calls": tool_calls,
             "text_content": combined_text or None,
+            "usage": stream_usage,
         }
 
     def _parse_converse_tool_response(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -391,6 +403,7 @@ class BedrockLLMService:
                     "input": tool_use.get("input", {}),
                 })
 
+        usage_raw = body.get("usage", {})
         combined_text = "\n".join(text_parts).strip()
         return {
             "stop_reason": stop_reason,
@@ -400,6 +413,10 @@ class BedrockLLMService:
             },
             "tool_calls": tool_calls,
             "text_content": combined_text or None,
+            "usage": {
+                "input_tokens": int(usage_raw.get("inputTokens", 0)),
+                "output_tokens": int(usage_raw.get("outputTokens", 0)),
+            },
         }
 
     def _model_text_response(self, *, system_prompt: str, user_prompt: str) -> str:

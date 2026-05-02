@@ -44,6 +44,9 @@ logger = logging.getLogger(__name__)
 _active_threads: set[threading.Thread] = set()
 _active_threads_lock = threading.Lock()
 
+# 사용자당 동시 진행 중 요청 최대 수 (processing + pending_approval + interrupted)
+_MAX_ACTIVE_REQUESTS_PER_USER = 3
+
 router = APIRouter(prefix="/sessions/{session_id}/requests", tags=["requests"], route_class=AuditRoute)
 entity_memory_service = EntityMemoryService()
 session_summary_service = SessionSummaryService()
@@ -352,6 +355,21 @@ def _supersede_pending_request(record: RequestRecord, replacement_request_id: in
         "정정 요청으로 인해 이 승인 요청은 무효화되었습니다."
         f"{replacement_hint} 최신 요청만 승인할 수 있습니다."
     )
+
+
+def _check_rate_limit(db_session: Session, user_id: str) -> bool:
+    """사용자의 동시 요청이 한도 미만이면 True를 반환한다.
+
+    PostgreSQL advisory lock으로 count→insert TOCTOU를 방지한다.
+    비-Postgres 환경(테스트)에서는 lock 없이 count만 사용한다.
+    """
+    try:
+        from sqlalchemy import text as _sa_text
+        db_session.execute(_sa_text("SELECT pg_advisory_xact_lock(hashtext(:uid))"), {"uid": user_id})
+    except Exception:
+        pass  # SQLite 등 비-Postgres 환경에서는 lock 스킵
+    count = RequestRepository(db_session).count_active_for_user(user_id)
+    return count < _MAX_ACTIVE_REQUESTS_PER_USER
 
 
 def _check_ttl(record: RequestRecord) -> None:
@@ -938,6 +956,14 @@ def create_request(
     session_record = SessionRepository(db_session).get_for_user(session_id=session_id, user_id=auth.user_id)
     if session_record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if not _check_rate_limit(db_session, auth.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"동시 요청 한도({_MAX_ACTIVE_REQUESTS_PER_USER})를 초과했습니다. "
+                "진행 중인 요청이 완료된 후 다시 시도해주세요."
+            ),
+        )
     repo = RequestRepository(db_session)
     previous_request = repo.get_latest_for_session(session_id=session_id, user_id=auth.user_id)
     session_context = None

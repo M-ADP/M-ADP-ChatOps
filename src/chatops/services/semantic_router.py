@@ -96,19 +96,40 @@ class SemanticRouter:
             logger.info("SemanticRouter unavailable (boto3 import/client): %s", exc)
             return None
 
-        # 연결 가능 여부를 첫 번째 엔트리로 probe
+        # 연결 가능 여부를 첫 번째 엔트리로 probe (최대 3회 재시도)
         probe = cls(client=client, anchors={})
-        probe_vec = probe.embed_text(_anchor_text(entries[0]))
+        _MAX_PROBE_RETRIES = 3
+        probe_vec: list[float] | None = None
+        for attempt in range(_MAX_PROBE_RETRIES):
+            probe_vec = probe.embed_text(_anchor_text(entries[0]))
+            if probe_vec is not None:
+                break
+            if attempt < _MAX_PROBE_RETRIES - 1:
+                logger.warning(
+                    "SemanticRouter probe attempt %d/%d failed, retrying...",
+                    attempt + 1, _MAX_PROBE_RETRIES,
+                )
         if probe_vec is None:
-            logger.info("SemanticRouter: Bedrock 접근 불가, keyword fallback 사용")
+            logger.warning(
+                "SemanticRouter: %d probe 시도 모두 실패, keyword fallback 사용",
+                _MAX_PROBE_RETRIES,
+            )
             return None
 
         anchors: dict[str, list[float]] = {entries[0].id: probe_vec}
+        failed_ids: list[str] = []
         for entry in entries[1:]:
             vec = probe.embed_text(_anchor_text(entry))
             if vec is not None:
                 anchors[entry.id] = vec
+            else:
+                failed_ids.append(entry.id)
 
+        if failed_ids:
+            logger.warning(
+                "SemanticRouter: %d개 entry 임베딩 실패 (무시하고 계속): %s",
+                len(failed_ids), failed_ids,
+            )
         logger.info(
             "SemanticRouter: %d/%d operation 앵커 임베딩 완료",
             len(anchors),

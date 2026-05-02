@@ -185,6 +185,14 @@ class RequestRepository:
         )
         return self.session.execute(query).scalar_one_or_none()
 
+    def count_active_for_user(self, user_id: str) -> int:
+        """사용자의 진행 중 요청 수를 반환한다 (rate limit 체크용)."""
+        query = select(func.count()).select_from(RequestRecord).where(
+            RequestRecord.user_id == user_id,
+            RequestRecord.status.in_(["processing", "pending_approval", "interrupted"]),
+        )
+        return self.session.execute(query).scalar_one()
+
     def get_latest_for_session(self, session_id: int, user_id: str) -> RequestRecord | None:
         query = (
             select(RequestRecord)
