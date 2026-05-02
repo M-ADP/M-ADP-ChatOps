@@ -57,6 +57,7 @@ class GraphService:
         checkpointer: Any = None,
         database_url: str | None = None,
         approval_ttl_seconds: int = 900,
+        token_limiter: Any = None,
         # 하위 호환: use_agent_loop 파라미터를 받되 무시한다.
         use_agent_loop: bool = True,
     ) -> None:
@@ -76,6 +77,7 @@ class GraphService:
             downstream_dispatcher=dispatcher,
             resolver_service=resolver_service or _NullResolverService(),
             approval_ttl_seconds=approval_ttl_seconds,
+            token_limiter=token_limiter,
         )
         self.workflow = agent_graph.compile(checkpointer=self.checkpointer)
         atexit.register(self.close)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from chatops.common.config.settings import (
     get_aws_config,
     get_bedrock_config,
     get_db_config,
+    get_redis_config,
+    get_token_limit_config,
 )
 from chatops.db.session import build_session_factory
 from chatops.dependencies.client.application import get_application_client
@@ -28,6 +31,9 @@ from chatops.services.downstream_dispatcher import DownstreamDispatcher
 from chatops.services.llm import BedrockLLMService
 from chatops.services.registry import RegistryService
 from chatops.services.resolver import ParameterResolverService
+from chatops.services.token_limiter import RedisTokenLimiter
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -105,6 +111,30 @@ def get_downstream_dispatcher() -> DownstreamDispatcher:
 
 
 @lru_cache(maxsize=1)
+def get_token_limiter() -> RedisTokenLimiter | None:
+    """Redis 기반 일일 토큰 제한기. Redis 연결 실패 시 None 반환 (fail open)."""
+    import redis
+    cfg = get_redis_config()
+    limit_cfg = get_token_limit_config()
+    try:
+        client = redis.Redis(
+            host=cfg.host,
+            port=cfg.port,
+            password=cfg.password,
+            db=cfg.db,
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        client.ping()
+        logger.info("RedisTokenLimiter connected (host=%s, daily_limit=%d)", cfg.host, limit_cfg.token_daily_limit)
+        return RedisTokenLimiter(client=client, daily_limit=limit_cfg.token_daily_limit)
+    except Exception:
+        logger.warning("Redis unavailable; token limiter disabled", exc_info=True)
+        return None
+
+
+@lru_cache(maxsize=1)
 def get_graph_service() -> GraphService:
     app_settings = get_app_settings()
     return GraphService(
@@ -114,6 +144,7 @@ def get_graph_service() -> GraphService:
         resolver_service=ParameterResolverService(),
         database_url=get_database_settings().url,
         approval_ttl_seconds=app_settings.approval_ttl_seconds,
+        token_limiter=get_token_limiter(),
     )
 
 

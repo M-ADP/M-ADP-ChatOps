@@ -341,12 +341,14 @@ class AgentGraph:
         downstream_dispatcher: Any,
         resolver_service: Any,
         approval_ttl_seconds: int = 900,
+        token_limiter: Any = None,
     ) -> None:
         self.llm_service = llm_service
         self.registry_service = registry_service
         self.downstream_dispatcher = downstream_dispatcher
         self.resolver_service = resolver_service
         self.approval_ttl_seconds = approval_ttl_seconds
+        self.token_limiter = token_limiter
 
         self.tool_schema_generator = ToolSchemaGenerator()
         self.specialist_router = SpecialistRouter(registry_service=registry_service)
@@ -447,14 +449,19 @@ class AgentGraph:
         assistant_message = _sanitize_assistant_message(response["assistant_message"])
         usage = response.get("usage") or {}
         if usage.get("input_tokens") or usage.get("output_tokens"):
+            input_t = int(usage.get("input_tokens") or 0)
+            output_t = int(usage.get("output_tokens") or 0)
             logger.info("bedrock_token_usage %s", json.dumps({
                 "request_id": state.get("request_id"),
                 "session_id": state.get("session_id"),
                 "user_id": state.get("user_id"),
-                "input_tokens": usage.get("input_tokens", 0),
-                "output_tokens": usage.get("output_tokens", 0),
+                "input_tokens": input_t,
+                "output_tokens": output_t,
                 "iteration": iteration_count,
             }, ensure_ascii=False))
+            if self.token_limiter is not None:
+                user_id = str(state.get("user_id") or "")
+                self.token_limiter.increment(user_id, input_t + output_t)
         updates: dict[str, Any] = {
             "messages": [assistant_message],
         }

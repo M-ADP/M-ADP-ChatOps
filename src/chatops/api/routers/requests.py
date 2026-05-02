@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import update
 from sqlalchemy.orm import Session, sessionmaker
 
-from chatops.api.dependencies import get_auth_context, get_db_session, get_graph_service
+from chatops.api.dependencies import get_auth_context, get_db_session, get_graph_service, get_token_limiter
 from chatops.common.logging.audit import AuditRoute
 from chatops.common.id_generator import IdGenerator
 from chatops.common.config.settings import get_app_config
@@ -963,6 +963,12 @@ def create_request(
                 f"동시 요청 한도({_MAX_ACTIVE_REQUESTS_PER_USER})를 초과했습니다. "
                 "진행 중인 요청이 완료된 후 다시 시도해주세요."
             ),
+        )
+    _token_limiter = get_token_limiter()
+    if _token_limiter is not None and _token_limiter.is_over_limit(auth.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="일일 토큰 사용량 한도를 초과했습니다. 내일 다시 시도해주세요.",
         )
     repo = RequestRepository(db_session)
     previous_request = repo.get_latest_for_session(session_id=session_id, user_id=auth.user_id)

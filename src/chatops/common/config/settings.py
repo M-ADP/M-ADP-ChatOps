@@ -165,6 +165,31 @@ class SonyflakeConfig(LoggedSettings):
     machine_id: int = 0
 
 
+class RedisConfig(LoggedSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(resolve_env_file()),
+        env_file_encoding="utf-8",
+        env_prefix="REDIS_",
+        extra="ignore",
+    )
+
+    host: str = "localhost"
+    port: int = 6379
+    password: str | None = None
+    db: int = 0
+
+
+class TokenLimitConfig(LoggedSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(resolve_env_file()),
+        env_file_encoding="utf-8",
+        env_prefix="",
+        extra="ignore",
+    )
+
+    token_daily_limit: int = 1_000_000
+
+
 @register_config
 @lru_cache(maxsize=1)
 def get_app_config() -> AppConfig:
@@ -193,3 +218,15 @@ def get_bedrock_config() -> BedrockConfig:
 @lru_cache(maxsize=1)
 def get_sonyflake_config() -> SonyflakeConfig:
     return SonyflakeConfig()
+
+
+@register_config
+@lru_cache(maxsize=1)
+def get_redis_config() -> RedisConfig:
+    return RedisConfig()
+
+
+@register_config
+@lru_cache(maxsize=1)
+def get_token_limit_config() -> TokenLimitConfig:
+    return TokenLimitConfig()
