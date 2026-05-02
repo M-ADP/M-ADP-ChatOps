@@ -127,7 +127,7 @@ class TestCorrectionFlow:
 
         Scenario:
         - handle_request → tool_use(max_cpu=1) → interrupted
-        - resume(rejected) → safety_gate returns error → agent_reasoning says '취소했습니다' → completed
+        - resume(rejected) → safety_gate returns error → agent_reasoning early-returns (no LLM call) → completed
         - new handle_request(correction 'cpu는 2로') → tool_use(max_cpu=2) → interrupted
         - resume(approved) → completed
         """
@@ -137,9 +137,7 @@ class TestCorrectionFlow:
         llm = FakeAgentLLMService(responses=[
             # 1차 요청: tool_use(cpu=1)
             _tool_use_response("project__create", {"name": "demo", "max_cpu": 1, "max_memory": 0.5, "max_disk": 10}),
-            # 거절 후: LLM이 취소 메시지 생성
-            _text_response("요청을 취소했습니다."),
-            # 2차 요청(정정): tool_use(cpu=2)
+            # 2차 요청(정정): tool_use(cpu=2) — 거절 시 LLM 호출 없음
             _tool_use_response("project__create", {"name": "demo", "max_cpu": 2, "max_memory": 0.5, "max_disk": 10}),
             # 승인 후: 완료 메시지
             _text_response("cpu 2로 프로젝트를 생성했습니다."),
@@ -189,9 +187,7 @@ class TestCorrectionFlow:
         llm = FakeAgentLLMService(responses=[
             # 1차: tool_use → interrupt
             _tool_use_response("project__create", {"name": "demo", "max_cpu": 1, "max_memory": 0.5, "max_disk": 10}),
-            # 거절 후: 취소 메시지
-            _text_response("취소했습니다."),
-            # 2차: 정정 요청 → tool_use
+            # 2차: 정정 요청 → tool_use — 거절 시 LLM 호출 없음
             _tool_use_response("project__create", {"name": "demo", "max_cpu": 2, "max_memory": 0.5, "max_disk": 10}),
             # 승인 후: 완료
             _text_response("완료했습니다."),
@@ -228,8 +224,9 @@ class TestCorrectionFlow:
         )
 
         # 2차 요청의 agent_reasoning 호출 시 이전 대화 맥락이 포함되어야 함
-        # recorded_messages[2]는 거절 후 새 handle_request에서의 호출
-        # 이전 대화(user, assistant tool_use, user tool_result, assistant 취소) + 새 user = 최소 5개
+        # recorded_messages[1]은 정정 handle_request에서의 호출
+        # 이전 대화(user, assistant tool_use, user tool_result) + 새 user = 4개
+        # recorded_messages[2]는 승인 후 resume에서의 호출 (tool_use + tool_result 추가 누적)
         assert len(llm.recorded_messages) >= 3
         assert len(llm.recorded_messages[2]) >= 5
 
