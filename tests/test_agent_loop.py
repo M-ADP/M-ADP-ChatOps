@@ -181,6 +181,9 @@ class FakeAgentRegistryService:
     def all_enabled_entries(self) -> list[RegistryEntry]:
         return self.entries
 
+    def find_agent_candidates(self, user_text: str, limit: int = 8) -> list[RegistryEntry]:
+        return self.entries[:limit]
+
     def get_entry(self, entry_id: str) -> RegistryEntry | None:
         for entry in self.entries:
             if entry.id == entry_id:

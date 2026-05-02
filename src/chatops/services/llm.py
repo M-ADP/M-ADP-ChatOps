@@ -424,8 +424,11 @@ class BedrockLLMService:
         return self._extract_text(body).strip()
 
     def _parse_json_response(self, content: str, *, context: str) -> dict[str, Any]:
+        # Nova 2 Lite는 JSON 응답을 ```json ... ``` 마크다운 펜스로 감싸 반환하는 경우가 있다.
+        # 시스템 프롬프트로 "JSON만 반환"을 강제해도 모델이 펜스를 추가하므로 파싱 단계에서 정규화한다.
+        normalized = self._strip_json_fence(content)
         try:
-            parsed = json.loads(content)
+            parsed = json.loads(normalized)
         except json.JSONDecodeError as exc:
             preview = content[:200].replace("\n", "\\n")
             if not preview:
@@ -438,6 +441,25 @@ class BedrockLLMService:
         if not isinstance(parsed, dict):
             raise ValueError(f"invalid JSON from Bedrock {context} response: expected object, got {type(parsed).__name__}")
         return parsed
+
+    @staticmethod
+    def _strip_json_fence(content: str) -> str:
+        """```json ... ``` 또는 ``` ... ``` 마크다운 펜스를 제거한다."""
+        if not isinstance(content, str):
+            return content
+        text = content.strip()
+        if not text.startswith("```"):
+            return text
+        # 첫 줄(```json 등)과 마지막 줄(```)을 제거
+        lines = text.splitlines()
+        if not lines:
+            return text
+        # 첫 줄은 ```로 시작 → 제거
+        lines = lines[1:]
+        # 마지막 줄이 ```로 끝나면 제거
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
 
     def _streaming_text_response(self, *, system_prompt: str, user_prompt: str) -> str:
         stream_handler = get_response_stream_handler()

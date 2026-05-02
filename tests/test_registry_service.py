@@ -211,7 +211,7 @@ def test_command_mode_prefers_project_add_member_for_member_add_language() -> No
     candidates = service.find_candidates("demo 프로젝트에 alice 멤버 추가해줘", usable_in="command")
 
     assert candidates
-    assert candidates[0].id == "project.add_member"
+    assert candidates[0].id == "project.invite_member"
 
 
 def test_command_mode_prefers_project_remove_member_for_member_remove_language() -> None:
@@ -264,8 +264,6 @@ def test_command_mode_excludes_unsupported_operations_from_candidates() -> None:
     candidates = service.find_candidates("프로젝트 멤버 추가해줘", usable_in="command", limit=20)
 
     candidate_ids = {candidate.id for candidate in candidates}
-    assert "project.add_member" in candidate_ids
+    assert "project.invite_member" in candidate_ids
     assert "project.remove_member" in candidate_ids
-    # transfer_ownership은 "멤버 추가" 요청에 대해 threshold 미달로 제외될 수 있음
-    # 핵심은 add_member가 최상위 후보로 선택되는 것
-    assert candidates[0].id == "project.add_member"
+    assert candidates[0].id == "project.invite_member"

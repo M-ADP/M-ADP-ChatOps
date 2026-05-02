@@ -85,6 +85,22 @@ class SafetyGateService:
             user_id=user_id,
             user_role=user_role,
         )
+        # 동명이인: LLM 피드백 루프를 거치지 않고 상태 머신이 직접 interrupt한다.
+        if precheck_result.get("disambiguation_required"):
+            partial_ids = precheck_result.get("resolved_ids") or {}
+            nickname_query = resolved_inputs.get("references", {}).get("target_nickname", "")
+            return SafetyDecision(
+                action="needs_approval",
+                resolved_inputs=resolved_inputs,
+                resolved_ids=partial_ids,
+                interrupt_payload={
+                    "type": "disambiguation",
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "query": nickname_query,
+                    "candidates": precheck_result.get("candidates", []),
+                },
+            )
         if precheck_result.get("error"):
             return SafetyDecision(
                 action="blocked",

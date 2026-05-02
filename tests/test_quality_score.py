@@ -353,6 +353,9 @@ class QualityRegistry:
                 return True, scored_candidates[:2]
         return False, []
 
+    def find_agent_candidates(self, user_text: str, limit: int = 8) -> list:
+        return list(ENTRIES.values())[:limit]
+
     def get_entry(self, entry_id: str):
         return ENTRIES.get(entry_id)
 

@@ -85,6 +85,9 @@ class StubGraphService:
             session_summary=self.session_summary,
         )
 
+    def reset_session_thread(self, session_id: int) -> None:
+        pass
+
     def resume_request(
         self,
         request_id: int,

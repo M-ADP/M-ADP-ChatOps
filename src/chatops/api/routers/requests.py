@@ -40,6 +40,10 @@ from chatops.services.session_messages import SessionMessageService
 
 logger = logging.getLogger(__name__)
 
+# Graceful shutdown: 진행 중인 background 스레드를 추적해 종료 시 join한다.
+_active_threads: set[threading.Thread] = set()
+_active_threads_lock = threading.Lock()
+
 router = APIRouter(prefix="/sessions/{session_id}/requests", tags=["requests"], route_class=AuditRoute)
 entity_memory_service = EntityMemoryService()
 session_summary_service = SessionSummaryService()
@@ -851,6 +855,8 @@ def _process_async_request(
             _sync_assistant_message(worker_session, record)
     finally:
         worker_session.close()
+        with _active_threads_lock:
+            _active_threads.discard(threading.current_thread())
 
 
 # ──────────────────────────────────────────────────
@@ -1006,6 +1012,7 @@ def create_request(
             superseded_request = previous_request
             _supersede_pending_request(superseded_request)
             db_session.flush()
+            graph_service.reset_session_thread(session_id)
         # UNKNOWN falls through to normal flow
 
     easter_egg_response = _easter_egg_response(payload.message)
@@ -1166,7 +1173,7 @@ def create_request(
             )
 
         session_factory = _build_session_factory(db_session)
-        threading.Thread(
+        _t = threading.Thread(
             target=_process_async_request,
             kwargs={
                 "session_factory": session_factory,
@@ -1180,8 +1187,11 @@ def create_request(
                 "request_type": request_type,
                 "intent": str(preview.get("intent") or ""),
             },
-            daemon=True,
-        ).start()
+            daemon=False,
+        )
+        with _active_threads_lock:
+            _active_threads.add(_t)
+        _t.start()
         return _build_request_response(record, record.message_text)
 
     request_id = IdGenerator.generate_sonyflake_id()

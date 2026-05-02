@@ -260,6 +260,9 @@ class FakeRegistryService:
     def all_enabled_entries(self) -> list[RegistryEntry]:
         return self._query_entries() + self._command_entries()
 
+    def find_agent_candidates(self, user_text: str, limit: int = 8) -> list[RegistryEntry]:
+        return (self._query_entries() + self._command_entries())[:limit]
+
     def find_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[RegistryEntry]:
         if self.calls is None:
             self.calls = []

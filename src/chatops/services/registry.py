@@ -105,6 +105,7 @@ class RegistryEntry:
     response_interpretation: str = ""
     plan_template: tuple[str, ...] = ()
     examples: tuple[str, ...] = ()
+    timeout_seconds: int = 30
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "RegistryEntry":
@@ -132,6 +133,7 @@ class RegistryEntry:
             response_interpretation=data.get("response_interpretation", ""),
             plan_template=tuple(data.get("plan_template", [])),
             examples=tuple(data.get("examples", [])),
+            timeout_seconds=int(data.get("timeout_seconds", 30)),
         )
 
     def searchable_text(self) -> str:

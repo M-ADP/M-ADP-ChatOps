@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from typing import Any
 
+from botocore.exceptions import ClientError
+
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
@@ -293,6 +295,35 @@ def _build_tool_result_message(
     }
 
 
+def _trim_messages(messages: list[Any], max_messages: int = 40) -> list[Any]:
+    """메시지 수가 max_messages를 초과하면 오래된 메시지를 제거한다.
+
+    Bedrock은 messages[0]이 user(text) role이어야 한다.
+    trim 후 선두가 assistant이거나 toolResult를 포함한 user면 제거해 보정한다.
+    """
+    if len(messages) <= max_messages:
+        return messages
+    trimmed = list(messages[-max_messages:])
+    while trimmed:
+        first = trimmed[0]
+        role = first.get("role") if isinstance(first, dict) else getattr(first, "role", None)
+        if role == "assistant":
+            trimmed = trimmed[1:]
+            continue
+        if role == "user":
+            content = (
+                first.get("content", []) if isinstance(first, dict)
+                else getattr(first, "content", [])
+            )
+            if isinstance(content, list) and any(
+                isinstance(b, dict) and "toolResult" in b for b in content
+            ):
+                trimmed = trimmed[1:]
+                continue
+        break
+    return trimmed
+
+
 class AgentGraph:
     """ReAct 스타일 Agent Loop를 LangGraph StateGraph로 구성한다."""
 
@@ -369,23 +400,40 @@ class AgentGraph:
         tool_specs = self.tool_schema_generator.generate_tool_specs(
             self.registry_service.find_agent_candidates(current_text)
         )
-        messages = list(state.get("messages", []))
+        messages = _trim_messages(list(state.get("messages", [])))
         tool_choice = _tool_choice_for_state(state)
 
-        if get_response_stream_handler() is not None:
-            response = self.llm_service.converse_with_tools_stream(
-                messages=messages,
-                system_prompt=_AGENT_SYSTEM_PROMPT,
-                tool_specs=tool_specs,
-                tool_choice=tool_choice,
+        try:
+            if get_response_stream_handler() is not None:
+                response = self.llm_service.converse_with_tools_stream(
+                    messages=messages,
+                    system_prompt=_AGENT_SYSTEM_PROMPT,
+                    tool_specs=tool_specs,
+                    tool_choice=tool_choice,
+                )
+            else:
+                response = self.llm_service.converse_with_tools(
+                    messages=messages,
+                    system_prompt=_AGENT_SYSTEM_PROMPT,
+                    tool_specs=tool_specs,
+                    tool_choice=tool_choice,
+                )
+        except ClientError as exc:
+            error_code = exc.response.get("Error", {}).get("Code", "UnknownError")
+            logger.error(
+                "Bedrock ClientError in agent_reasoning (request_id=%s, code=%s): %s",
+                state.get("request_id"), error_code, exc,
             )
-        else:
-            response = self.llm_service.converse_with_tools(
-                messages=messages,
-                system_prompt=_AGENT_SYSTEM_PROMPT,
-                tool_specs=tool_specs,
-                tool_choice=tool_choice,
-            )
+            if error_code == "ThrottlingException":
+                msg = "현재 서비스 요청이 많습니다. 잠시 후 다시 시도해주세요."
+            elif error_code == "ValidationException":
+                msg = "요청 형식 오류가 발생했습니다. 다시 시도해주세요."
+            else:
+                msg = "AI 서비스 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            return {
+                "final_response": msg,
+                "request_status": "failed",
+            }
 
         # Nova 2 Lite는 toolUse와 함께 빈 text 블록을 반환하는 경우가 있어,
         # 다음 turn의 messages에 그대로 누적되면 Bedrock이 ValidationException을 던진다.
@@ -540,6 +588,27 @@ class AgentGraph:
 
             # 동명이인 resume: {"selected_user_id": 123}이면 선택 결과를 보존
             if isinstance(approved, dict) and "selected_user_id" in approved:
+                selected_id = approved["selected_user_id"]
+                # 화이트리스트 검증: interrupt 시 제시된 candidates에 있는 ID만 허용
+                if (
+                    decision.interrupt_payload
+                    and decision.interrupt_payload.get("type") == "disambiguation"
+                ):
+                    valid_ids = {
+                        c.get("user_id")
+                        for c in decision.interrupt_payload.get("candidates", [])
+                    }
+                    if selected_id not in valid_ids:
+                        logger.warning(
+                            "Rejected invalid selected_user_id=%s (valid=%s, request_id=%s)",
+                            selected_id, valid_ids, state.get("request_id"),
+                        )
+                        error_result = _build_tool_result_message(
+                            tool_call["tool_use_id"],
+                            {"error": "유효하지 않은 사용자 선택입니다. 제시된 후보 중에서 선택해주세요."},
+                            is_error=True,
+                        )
+                        return {"messages": [error_result], "request_status": "failed"}
                 disambiguation_selection = approved
 
         # 실행 가능 — pending_tool_call에 저장
@@ -577,6 +646,7 @@ class AgentGraph:
             return {"messages": [error_result], "pending_tool_call": None}
 
         # 실행
+        timeout_s = float(getattr(operation, "timeout_seconds", 30))
         started_at = perf_counter()
         try:
             if operation.operation_kind == "read":
@@ -587,7 +657,8 @@ class AgentGraph:
                         user_role=state.get("user_role"),
                         org_id=state.get("org_id"),
                         resolved_inputs=resolved_inputs,
-                    )
+                    ),
+                    timeout_seconds=timeout_s,
                 )
             else:
                 result = self._run_awaitable(
@@ -597,8 +668,20 @@ class AgentGraph:
                         user_role=state.get("user_role"),
                         org_id=state.get("org_id"),
                         resolved_inputs=resolved_inputs,
-                    )
+                    ),
+                    timeout_seconds=timeout_s,
                 )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Tool execution timed out for %s after %.0fs (request_id=%s)",
+                operation_id, timeout_s, state.get("request_id"),
+            )
+            error_result = _build_tool_result_message(
+                tool_call["tool_use_id"],
+                {"error": f"작업 실행 시간이 초과됐습니다 (timeout={int(timeout_s)}s). 잠시 후 다시 시도해주세요."},
+                is_error=True,
+            )
+            return {"messages": [error_result], "pending_tool_call": None}
         except Exception as exc:
             logger.error("Tool execution failed for %s: %s", operation_id, exc, exc_info=True)
             error_result = _build_tool_result_message(
@@ -720,9 +803,9 @@ class AgentGraph:
         return merged
 
     @staticmethod
-    def _run_awaitable(awaitable):
+    def _run_awaitable(awaitable, timeout_seconds: float = 30.0):
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(awaitable)
+            return asyncio.run(asyncio.wait_for(awaitable, timeout=timeout_seconds))
         raise RuntimeError("async downstream 호출은 현재 sync workflow에서만 지원합니다.")

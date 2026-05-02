@@ -144,6 +144,7 @@ class GraphService:
             "request_status": "processing",
             "executed_operations": [],
             "pending_tool_call": None,
+            "correction_attempts": 0,
             "created_at": now,
         }
         # session_id를 thread_id로 사용 → 같은 세션의 메시지 히스토리가 누적된다.
@@ -222,6 +223,29 @@ class GraphService:
             ],
             execution_audit=state.get("execution_audit"),
             task_snapshot=state.get("task_snapshot"),
+        )
+
+    def reset_session_thread(self, session_id: int) -> None:
+        """supersede 시 이전 interrupted 상태의 스테일 필드를 checkpoint에서 초기화한다.
+
+        LangGraph가 새 invoke 전에 pending_tool_call 등을 이어받지 않도록 보장한다.
+        checkpoint가 없으면 no-op.
+        """
+        config = self._session_config(session_id)
+        try:
+            snapshot = self.workflow.get_state(config)
+        except Exception:
+            return
+        if snapshot is None or not snapshot.values:
+            return
+        self.workflow.update_state(
+            config,
+            {
+                "pending_tool_call": None,
+                "request_status": "processing",
+                "executed_operations": [],
+                "correction_attempts": 0,
+            },
         )
 
     def _session_config(self, session_id: int) -> dict[str, object]:

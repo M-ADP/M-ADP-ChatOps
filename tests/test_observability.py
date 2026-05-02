@@ -152,6 +152,10 @@ class _FallbackRegistryService:
     def all_enabled_entries(self) -> list[RegistryEntry]:
         return [_query_entry("application.get_apps_logs")]
 
+    def find_agent_candidates(self, user_text: str, limit: int = 8) -> list[RegistryEntry]:
+        del user_text, limit
+        return [_query_entry("application.get_apps_logs")]
+
     def find_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[RegistryEntry]:
         del user_text, limit
         assert usable_in == "query"
