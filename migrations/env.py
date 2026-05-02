@@ -49,7 +49,7 @@ def resolve_database_url() -> str:
         raise RuntimeError("DATABASE_URL 설정이 필요합니다.") from exc
 
 
-config.set_main_option("sqlalchemy.url", resolve_database_url())
+config.set_main_option("sqlalchemy.url", resolve_database_url().replace("%", "%%"))
 target_metadata = Base.metadata
 
 
