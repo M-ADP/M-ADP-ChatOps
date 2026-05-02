@@ -5,6 +5,7 @@ from chatops.api.routers.requests import router as request_router
 from chatops.api.routers.search import router as search_router
 from chatops.api.routers.sessions import router as session_router
 from chatops.api.routers.stream import router as stream_router
+from chatops.api.routers.usage import router as usage_router
 
 
 def build_api_router() -> APIRouter:
@@ -14,4 +15,5 @@ def build_api_router() -> APIRouter:
     router.include_router(request_router)
     router.include_router(search_router)
     router.include_router(stream_router)
+    router.include_router(usage_router)
     return router
