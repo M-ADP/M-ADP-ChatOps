@@ -9,6 +9,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from chatops.api.dependencies import get_auth_context, get_db_session
 from chatops.common.logging.audit import AuditRoute
 from chatops.common.config.settings import get_app_config
+from chatops.common.metrics import (
+    sse_connection_duration_seconds,
+    sse_connections_active,
+    sse_connections_total,
+    sse_db_polls_total,
+    sse_events_sent_total,
+)
 from chatops.db.models import RequestRecord
 from chatops.db.repositories import RequestRepository, SessionRepository
 from chatops.domain.enums import RequestStatus
@@ -46,28 +53,46 @@ def _stream_follow_events(
 ):
     last_sequence = starting_sequence
     last_emitted_at = time.monotonic()
+    started_at = time.monotonic()
+    outcome = "closed_normal"
 
-    while True:
-        with session_factory() as poll_session:
-            request_record = poll_session.get(RequestRecord, request_id)
-            events = EventService(poll_session).list_after_sequence(request_id=request_id, sequence=last_sequence)
+    sse_connections_active.inc()
+    sse_connections_total.labels(outcome="opened").inc()
 
-        if events:
-            yield _format_sse_body(events)
-            last_sequence = events[-1].sequence
-            last_emitted_at = time.monotonic()
+    try:
+        while True:
+            with session_factory() as poll_session:
+                request_record = poll_session.get(RequestRecord, request_id)
+                events = EventService(poll_session).list_after_sequence(request_id=request_id, sequence=last_sequence)
+            sse_db_polls_total.inc()
+
+            if events:
+                yield _format_sse_body(events)
+                sse_events_sent_total.inc(len(events))
+                last_sequence = events[-1].sequence
+                last_emitted_at = time.monotonic()
+                if _is_terminal_status(request_record.status if request_record else None):
+                    break
+                continue
+
             if _is_terminal_status(request_record.status if request_record else None):
                 break
-            continue
 
-        if _is_terminal_status(request_record.status if request_record else None):
-            break
-
-        now = time.monotonic()
-        if now - last_emitted_at >= keepalive_seconds:
-            yield ": keep-alive\n\n"
-            last_emitted_at = now
-        time.sleep(poll_interval_seconds)
+            now = time.monotonic()
+            if now - last_emitted_at >= keepalive_seconds:
+                yield ": keep-alive\n\n"
+                last_emitted_at = now
+            time.sleep(poll_interval_seconds)
+    except GeneratorExit:
+        outcome = "client_disconnect"
+        raise
+    except Exception:
+        outcome = "closed_error"
+        raise
+    finally:
+        sse_connections_active.dec()
+        sse_connections_total.labels(outcome=outcome).inc()
+        sse_connection_duration_seconds.observe(time.monotonic() - started_at)
 
 
 @router.get("/{request_id}/stream")
