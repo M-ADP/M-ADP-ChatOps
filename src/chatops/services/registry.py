@@ -4,9 +4,12 @@ from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
+
+if TYPE_CHECKING:
+    from chatops.graph.agent_loop import AgentStepContext
 
 
 TOKEN_PATTERN = re.compile(r"[가-힣A-Za-z0-9_./-]+")
@@ -202,27 +205,74 @@ class RegistryService:
     # 사용자 쿼리 텍스트에 관련 키워드가 없어도 점수를 못 받으므로 항상 포함한다.
     _ALWAYS_INCLUDED_AGENT_TOOLS: frozenset[str] = frozenset({"project.check_available"})
 
-    def find_agent_candidates(self, user_text: str, limit: int = 8) -> list[RegistryEntry]:
+    # Follow-up Router 튜닝 상수
+    _EXECUTED_PENALTY: int = 5          # 이미 실행한 entry score 감점
+    _RECOVERY_DOMAIN_BONUS: int = 3     # recovery 모드에서 실패 도메인의 read 도구 보너스
+    _SAFE_FALLBACK_TOP_N: int = 5       # candidates가 비었을 때 score 상위 N개 fallback
+
+    def find_agent_candidates(
+        self,
+        user_text: str,
+        *,
+        step_context: "AgentStepContext | None" = None,
+        limit: int = 8,
+    ) -> list[RegistryEntry]:
         """Agent Loop용 도구 후보 필터링.
 
         SemanticRouter 사용 가능 시: 코사인 유사도 기반으로 limit개까지 필터링.
         미사용 시(keyword fallback): 전체 enabled entries 반환 (필터 효과 미미하므로).
         두 경우 모두 _ALWAYS_INCLUDED_AGENT_TOOLS는 항상 포함한다.
+
+        step_context가 주어지고 mode in {"followup", "recovery"}이면:
+        - 합성 쿼리(원문 + tool_result 요약)로 임베딩/스코어 재계산
+        - 이미 실행한 entry 감점
+        - recovery 모드: 실패 도메인의 read 도구 부스트 + threshold 완화
+        - candidates가 비면 all_enabled 대신 (score top-N + safe read) fallback
         """
         all_enabled = list(self.all_enabled_entries())
 
         if self._semantic_router is None:
             return all_enabled
 
-        user_vec = self._semantic_router.embed_text(user_text) if user_text.strip() else None
+        mode = step_context.candidate_mode if step_context is not None else "initial"
+
+        # followup/recovery는 원문 + 최근 결과 요약을 합쳐 임베딩/스코어 계산
+        if mode in ("followup", "recovery") and step_context is not None:
+            scoring_text = self._compose_followup_text(user_text, step_context)
+        else:
+            scoring_text = user_text
+
+        user_vec = (
+            self._semantic_router.embed_text(scoring_text) if scoring_text.strip() else None
+        )
         if user_vec is None:
             return all_enabled
 
-        scored = sorted(
-            [(entry, self._score(entry, user_text, user_vec=user_vec)) for entry in all_enabled],
-            key=lambda pair: (-pair[1], pair[0].id),
-        )
-        candidates = [entry for entry, score in scored if score >= self.minimum_score_threshold][:limit]
+        executed_ids = set(step_context.executed_operation_ids) if step_context is not None else set()
+        failed_domain = self._failed_domain(step_context) if mode == "recovery" else None
+
+        scored: list[tuple[RegistryEntry, int]] = []
+        for entry in all_enabled:
+            score = self._score(entry, scoring_text, user_vec=user_vec)
+            if entry.id in executed_ids:
+                score -= self._EXECUTED_PENALTY
+            if (
+                failed_domain is not None
+                and entry.operation_kind == "read"
+                and entry.id.split(".", 1)[0] == failed_domain
+            ):
+                score += self._RECOVERY_DOMAIN_BONUS
+            scored.append((entry, score))
+        scored.sort(key=lambda pair: (-pair[1], pair[0].id))
+
+        threshold = self.minimum_score_threshold
+        if mode == "recovery":
+            threshold = max(1, threshold // 2)
+
+        candidates = [entry for entry, score in scored if score >= threshold][:limit]
+
+        if not candidates:
+            candidates = self._safe_fallback(scored, failed_domain)
 
         # 항상 포함해야 하는 도구가 candidates에 없으면 추가
         candidate_ids = {e.id for e in candidates}
@@ -231,6 +281,53 @@ class RegistryService:
                 candidates.append(self.entries_by_id[tool_id])
 
         return candidates if candidates else all_enabled
+
+    def _compose_followup_text(
+        self, user_text: str, step_context: "AgentStepContext"
+    ) -> str:
+        """원문 + tool_result 요약 + (optional) remaining_goal_hint를 합성한 임베딩 쿼리."""
+        parts = [user_text.strip()]
+        summary = (step_context.latest_tool_result_summary or "").strip()
+        if summary:
+            parts.append(summary)
+        hint = (step_context.remaining_goal_hint or "").strip() if step_context.remaining_goal_hint else ""
+        if hint:
+            parts.append(hint)
+        return " ".join(p for p in parts if p)
+
+    @staticmethod
+    def _failed_domain(step_context: "AgentStepContext | None") -> str | None:
+        """recovery 모드에서 가장 최근 실행 도구의 도메인 prefix를 반환."""
+        if step_context is None or not step_context.executed_operation_ids:
+            return None
+        last_id = step_context.executed_operation_ids[-1]
+        if "." not in last_id:
+            return None
+        return last_id.split(".", 1)[0]
+
+    def _safe_fallback(
+        self,
+        scored: list[tuple[RegistryEntry, int]],
+        failed_domain: str | None,
+    ) -> list[RegistryEntry]:
+        """candidates가 비었을 때의 안전한 fallback.
+
+        all_enabled 전체로 가지 않고, (a) score 상위 N + (b) 실패 도메인의 read 도구만 모은다.
+        """
+        top_n = [entry for entry, _ in scored[: self._SAFE_FALLBACK_TOP_N]]
+        result: list[RegistryEntry] = list(top_n)
+        seen = {entry.id for entry in result}
+        if failed_domain is not None:
+            for entry, _ in scored:
+                if entry.id in seen:
+                    continue
+                if (
+                    entry.operation_kind == "read"
+                    and entry.id.split(".", 1)[0] == failed_domain
+                ):
+                    result.append(entry)
+                    seen.add(entry.id)
+        return result
 
     def find_candidates(self, user_text: str, usable_in: str, limit: int = 5) -> list[RegistryEntry]:
         """점수 기준으로 후보를 반환한다. threshold 미달 후보는 제외."""

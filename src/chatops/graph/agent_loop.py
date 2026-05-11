@@ -11,9 +11,10 @@ import asyncio
 import json
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 from botocore.exceptions import ClientError
 
@@ -181,6 +182,85 @@ def _extract_current_user_text(state: AgentState) -> str:
             if isinstance(block, dict) and "text" in block:
                 return str(block["text"])
     return ""
+
+
+@dataclass(frozen=True)
+class AgentStepContext:
+    """Agent Loop의 한 iteration에서 tool 후보 선정에 쓰일 입력 컨텍스트.
+
+    initial: 아직 도구를 한 번도 실행하지 않은 상태 — 원문만 사용.
+    followup: 최소 1회 실행했고 마지막 결과가 성공 — 결과 요약을 합성해 후보 재산출.
+    recovery: 마지막 실행이 실패 — 같은 도메인 read 도구를 폭넓게 포함하도록 부스트.
+    """
+
+    original_user_text: str
+    executed_operation_ids: tuple[str, ...]
+    latest_tool_result_summary: str
+    last_result_success: bool | None
+    candidate_mode: Literal["initial", "followup", "recovery"]
+    # Planner 단계에서 채울 예약 필드 — 현재 미사용
+    remaining_goal_hint: str | None = None
+
+
+def _summarize_executed_operation(op: dict[str, Any]) -> str:
+    """단일 executed_operation 항목을 한 줄 요약 문자열로 변환."""
+    op_id = str(op.get("operation_id") or "")
+    result = op.get("result") or {}
+    if not isinstance(result, dict):
+        result = {}
+    success = result.get("success")
+    tag = "ok" if success is not False else "failed"
+    summary = result.get("summary") or result.get("error") or ""
+    if not isinstance(summary, str):
+        summary = str(summary)
+    summary = summary.strip().replace("\n", " ")
+    if len(summary) > 120:
+        summary = summary[:117] + "..."
+    return f"[{tag}] {op_id} → {summary}" if summary else f"[{tag}] {op_id}"
+
+
+def _build_step_context(state: AgentState) -> AgentStepContext:
+    """현재 state에서 Follow-up Router 입력 컨텍스트를 구성."""
+    original = _extract_current_user_text(state)
+    executed = state.get("executed_operations") or []
+    if not isinstance(executed, list):
+        executed = []
+
+    executed_ids = tuple(
+        str(op.get("operation_id") or "")
+        for op in executed
+        if isinstance(op, dict) and op.get("operation_id")
+    )
+
+    last_success: bool | None
+    if not executed:
+        last_success = None
+    else:
+        last_result = executed[-1].get("result") if isinstance(executed[-1], dict) else None
+        if isinstance(last_result, dict) and last_result.get("success") is False:
+            last_success = False
+        else:
+            last_success = True
+
+    if not executed:
+        mode: Literal["initial", "followup", "recovery"] = "initial"
+    elif last_success is False:
+        mode = "recovery"
+    else:
+        mode = "followup"
+
+    # 최근 2건의 요약만 합성. 너무 많으면 임베딩 입력이 노이즈로 흐려짐.
+    recent = [op for op in executed[-2:] if isinstance(op, dict)]
+    summary_lines = [_summarize_executed_operation(op) for op in recent]
+    summary = " | ".join(line for line in summary_lines if line)
+
+    return AgentStepContext(
+        original_user_text=original,
+        executed_operation_ids=executed_ids,
+        latest_tool_result_summary=summary,
+        last_result_success=last_success,
+        candidate_mode=mode,
+    )
 
 
 def _tool_choice_for_state(state: AgentState) -> dict[str, Any]:
@@ -405,12 +485,29 @@ class AgentGraph:
                 "request_status": "completed",
             }
 
-        current_text = _extract_current_user_text(state)
-        tool_specs = self.tool_schema_generator.generate_tool_specs(
-            self.registry_service.find_agent_candidates(current_text)
+        step_ctx = _build_step_context(state)
+        candidate_entries = self.registry_service.find_agent_candidates(
+            step_ctx.original_user_text,
+            step_context=step_ctx,
         )
+        tool_specs = self.tool_schema_generator.generate_tool_specs(candidate_entries)
         messages = _trim_messages(list(state.get("messages", [])))
         tool_choice = _tool_choice_for_state(state)
+
+        log_decision_trace(
+            stage="agent_candidate_selection",
+            request_id=state.get("request_id"),
+            session_id=state.get("session_id"),
+            user_id=state.get("user_id"),
+            decision=step_ctx.candidate_mode,
+            data={
+                "candidate_mode": step_ctx.candidate_mode,
+                "iteration": iteration_count,
+                "executed_count": len(step_ctx.executed_operation_ids),
+                "candidate_ids": [entry.id for entry in candidate_entries],
+                "last_result_success": step_ctx.last_result_success,
+            },
+        )
 
         try:
             if get_response_stream_handler() is not None:

@@ -181,7 +181,16 @@ class FakeAgentRegistryService:
     def all_enabled_entries(self) -> list[RegistryEntry]:
         return self.entries
 
-    def find_agent_candidates(self, user_text: str, limit: int = 8) -> list[RegistryEntry]:
+    last_step_context: Any = None
+
+    def find_agent_candidates(
+        self,
+        user_text: str,
+        *,
+        step_context: Any = None,
+        limit: int = 8,
+    ) -> list[RegistryEntry]:
+        self.last_step_context = step_context
         return self.entries[:limit]
 
     def get_entry(self, entry_id: str) -> RegistryEntry | None:
@@ -718,3 +727,110 @@ def test_use_agent_loop_flag_is_accepted_but_ignored() -> None:
 
     assert result.request_type == "agent"
     assert result.status == "completed"
+
+
+# ──────────────────────────────────────────────────
+# 8. Follow-up Router 테스트 (_build_step_context)
+# ──────────────────────────────────────────────────
+
+from chatops.graph.agent_loop import _build_step_context, _summarize_executed_operation
+
+
+def _build_state(
+    *,
+    user_text: str = "프로젝트 만들어줘",
+    executed: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "messages": [{"role": "user", "content": [{"text": user_text}]}],
+        "executed_operations": executed or [],
+    }
+
+
+def test_build_step_context_initial_when_no_execution() -> None:
+    state = _build_state(executed=[])
+
+    ctx = _build_step_context(state)
+
+    assert ctx.candidate_mode == "initial"
+    assert ctx.executed_operation_ids == ()
+    assert ctx.last_result_success is None
+    assert ctx.latest_tool_result_summary == ""
+    assert ctx.original_user_text == "프로젝트 만들어줘"
+
+
+def test_build_step_context_followup_after_successful_execution() -> None:
+    state = _build_state(executed=[
+        {
+            "operation_id": "project.list_projects",
+            "result": {"success": True, "summary": "12개 프로젝트 조회됨"},
+        }
+    ])
+
+    ctx = _build_step_context(state)
+
+    assert ctx.candidate_mode == "followup"
+    assert ctx.executed_operation_ids == ("project.list_projects",)
+    assert ctx.last_result_success is True
+    assert "project.list_projects" in ctx.latest_tool_result_summary
+    assert "[ok]" in ctx.latest_tool_result_summary
+
+
+def test_build_step_context_recovery_when_last_failed() -> None:
+    state = _build_state(executed=[
+        {
+            "operation_id": "project.create",
+            "result": {"success": False, "error": "422 missing field: name"},
+        }
+    ])
+
+    ctx = _build_step_context(state)
+
+    assert ctx.candidate_mode == "recovery"
+    assert ctx.last_result_success is False
+    assert "[failed]" in ctx.latest_tool_result_summary
+    assert "project.create" in ctx.latest_tool_result_summary
+
+
+def test_summarize_executed_operation_truncates_long_summary() -> None:
+    op = {
+        "operation_id": "project.list_projects",
+        "result": {"success": True, "summary": "x" * 300},
+    }
+
+    line = _summarize_executed_operation(op)
+
+    assert line.startswith("[ok] project.list_projects → ")
+    # 120자 cap + 마커
+    assert "..." in line
+    assert len(line) < 200
+
+
+def test_agent_loop_passes_step_context_to_registry_on_followup_iteration() -> None:
+    """멀티스텝: 1차 도구 실행 후 2차 iteration에서 registry에 followup step_context가 전달된다."""
+    llm = FakeAgentLLMService(responses=[
+        _tool_use_response("monitoring__get_app_deployment_traffic", {
+            "project_name": "alpha",
+            "application_name": "web-api",
+        }),
+        _text_response("트래픽은 정상입니다."),
+    ])
+    registry = FakeAgentRegistryService()
+    dispatcher = FakeAgentDownstreamDispatcher(
+        execute_result={"summary": "트래픽 100 req/s", "success": True},
+    )
+    service = _make_agent_service(llm=llm, registry=registry, dispatcher=dispatcher)
+
+    service.handle_request(
+        session_id=1001,
+        user_id="user-1",
+        message_text="alpha 프로젝트 web-api 트래픽 보여줘",
+    )
+
+    # 2회의 agent_reasoning 호출 모두 step_context를 받았어야 한다
+    # 최종(2번째) 호출 시 step_context.candidate_mode == "followup"
+    assert registry.last_step_context is not None
+    assert registry.last_step_context.candidate_mode == "followup"
+    assert "monitoring.get_app_deployment_traffic" in registry.last_step_context.executed_operation_ids
+    assert registry.last_step_context.last_result_success is True
+

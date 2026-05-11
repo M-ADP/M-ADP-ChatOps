@@ -1,4 +1,10 @@
-from chatops.services.registry import RegistryService
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from chatops.graph.agent_loop import AgentStepContext
+from chatops.services.registry import RegistryEntry, RegistryService
 
 
 def test_query_mode_returns_only_read_operations() -> None:
@@ -267,3 +273,213 @@ def test_command_mode_excludes_unsupported_operations_from_candidates() -> None:
     assert "project.invite_member" in candidate_ids
     assert "project.remove_member" in candidate_ids
     assert candidates[0].id == "project.invite_member"
+
+
+# ──────────────────────────────────────────────────
+# Follow-up Router 테스트
+# ──────────────────────────────────────────────────
+
+
+def _make_entry(
+    entry_id: str,
+    *,
+    operation_kind: str = "read",
+    capability: str = "",
+    summary: str = "",
+    usable_in: tuple[str, ...] = ("query",),
+) -> RegistryEntry:
+    return RegistryEntry(
+        id=entry_id,
+        source_file=f"{entry_id}.ai.yaml",
+        operation_id=entry_id.split(".", 1)[1],
+        path=f"/{entry_id.replace('.', '/')}",
+        method="GET" if operation_kind == "read" else "POST",
+        summary=summary or entry_id,
+        capability=capability or entry_id,
+        usable_in=usable_in,
+        operation_kind=operation_kind,
+        when_to_use=(),
+        when_not_to_use=(),
+        requires_confirmation=False,
+        risk_level="low",
+        side_effects=(),
+        required_headers=(),
+    )
+
+
+@dataclass
+class StubSemanticRouter:
+    """find_agent_candidates 테스트용 결정론적 임베딩 stub.
+
+    embed_text가 받은 텍스트를 그대로 anchor로 매칭한다.
+    score_bonus는 keyword-based로 동작 — operation_id별 keyword 매칭이 있으면 보너스.
+    """
+
+    keyword_bonus: dict[str, dict[str, int]] = field(default_factory=dict)
+    last_embed_text: str | None = None
+
+    def embed_text(self, text: str) -> list[float] | None:
+        self.last_embed_text = text
+        # non-None 벡터를 반환해야 fallback 분기 회피
+        return [1.0]
+
+    def score_bonus(self, user_vec: list[float], operation_id: str) -> int:
+        text = self.last_embed_text or ""
+        bonus = 0
+        for keyword, score in self.keyword_bonus.get(operation_id, {}).items():
+            if keyword in text:
+                bonus = max(bonus, score)
+        return bonus
+
+
+def test_find_agent_candidates_step_context_none_keeps_legacy_behavior() -> None:
+    """step_context 미지정 시 기존 동작과 동일해야 한다 — 회귀 방지."""
+    entries = [
+        _make_entry("project.list_projects", capability="project list 목록"),
+        _make_entry("application.list_apps", capability="application list 목록"),
+        _make_entry("project.check_available", capability="precheck"),
+    ]
+    router = StubSemanticRouter(
+        keyword_bonus={
+            "project.list_projects": {"project": 20},
+            "application.list_apps": {"application": 20},
+        }
+    )
+    service = RegistryService(
+        entries=entries,
+        minimum_score_threshold=1,
+        semantic_router=router,
+    )
+
+    candidates = service.find_agent_candidates("project list 보여줘")
+    ids = [c.id for c in candidates]
+
+    assert "project.list_projects" in ids
+    # 항상 포함 도구
+    assert "project.check_available" in ids
+
+
+def test_find_agent_candidates_followup_composes_tool_result_into_embed_query() -> None:
+    """followup 모드에서 latest_tool_result_summary가 임베딩 쿼리에 합성되어야 한다."""
+    entries = [
+        _make_entry("project.list_projects", capability="project list"),
+        _make_entry("application.create_apps", operation_kind="write", capability="application create"),
+        _make_entry("project.check_available", capability="precheck"),
+    ]
+    router = StubSemanticRouter()
+    service = RegistryService(
+        entries=entries,
+        minimum_score_threshold=1,
+        semantic_router=router,
+    )
+
+    ctx = AgentStepContext(
+        original_user_text="프로젝트 X 만들고 그 안에 앱 만들어줘",
+        executed_operation_ids=("project.list_projects",),
+        latest_tool_result_summary="[ok] project.list_projects → Found project 'X' id=42",
+        last_result_success=True,
+        candidate_mode="followup",
+    )
+
+    service.find_agent_candidates(ctx.original_user_text, step_context=ctx)
+
+    # 임베딩 호출이 합성 텍스트로 이루어졌는지 검증
+    assert router.last_embed_text is not None
+    assert "프로젝트 X" in router.last_embed_text
+    assert "[ok] project.list_projects" in router.last_embed_text
+
+
+def test_find_agent_candidates_followup_penalizes_already_executed() -> None:
+    """이미 실행한 operation은 score 감점되어 threshold 미달 시 후보에서 빠진다."""
+    # 두 entry는 동일하게 의미 보너스 6점을 받아 동률 — penalty -5가 결정적으로 작용
+    entries = [
+        _make_entry("foo.executed_op", capability="중립캡"),
+        _make_entry("foo.other_op", capability="중립캡"),
+        _make_entry("project.check_available", capability="precheck"),
+    ]
+    router = StubSemanticRouter(
+        keyword_bonus={
+            "foo.executed_op": {"중립쿼리": 6},
+            "foo.other_op": {"중립쿼리": 6},
+        }
+    )
+    service = RegistryService(
+        entries=entries,
+        minimum_score_threshold=5,
+        semantic_router=router,
+    )
+
+    # latest_tool_result_summary는 비워서 합성 텍스트 오염을 막는다
+    ctx = AgentStepContext(
+        original_user_text="중립쿼리",
+        executed_operation_ids=("foo.executed_op",),
+        latest_tool_result_summary="",
+        last_result_success=True,
+        candidate_mode="followup",
+    )
+
+    candidates = service.find_agent_candidates(ctx.original_user_text, step_context=ctx)
+    ids = [c.id for c in candidates]
+
+    # executed_op는 6 - 5(penalty) = 1점 → threshold(5) 미달로 후보에서 빠진다.
+    # other_op는 6점 그대로 유지되어 후보에 남는다.
+    assert "foo.other_op" in ids
+    assert "foo.executed_op" not in ids
+
+
+def test_find_agent_candidates_recovery_boosts_failed_domain_read_tools() -> None:
+    """recovery 모드에서 실패 도메인의 read 도구가 부스트되어 후보에 들어온다."""
+    entries = [
+        _make_entry("project.list_projects", capability="조회"),  # 같은 도메인 read
+        _make_entry("project.get_resource_limit", capability="조회"),  # 같은 도메인 read
+        _make_entry("application.create_apps", operation_kind="write", capability="조회"),
+    ]
+    # 스코어가 0이라도 recovery 보너스로 통과해야 한다
+    router = StubSemanticRouter(keyword_bonus={})
+    service = RegistryService(
+        entries=entries,
+        minimum_score_threshold=10,  # 보너스 없이는 통과 불가능한 threshold
+        semantic_router=router,
+    )
+
+    ctx = AgentStepContext(
+        original_user_text="아무 텍스트",
+        executed_operation_ids=("project.create",),
+        latest_tool_result_summary="[failed] project.create → 422 missing name",
+        last_result_success=False,
+        candidate_mode="recovery",
+    )
+
+    candidates = service.find_agent_candidates(ctx.original_user_text, step_context=ctx)
+    ids = {c.id for c in candidates}
+
+    # 같은 도메인 read 도구가 보너스 + 완화된 threshold(=5)로 후보에 들어온다
+    assert "project.list_projects" in ids
+    assert "project.get_resource_limit" in ids
+
+
+def test_find_agent_candidates_empty_uses_safe_fallback_not_all_enabled() -> None:
+    """후보가 비면 all_enabled 전체가 아닌 score 상위 N으로 제한된 fallback을 쓴다."""
+    # 모든 entry가 threshold 미달이 되도록 구성
+    entries = [_make_entry(f"domain.op{i}") for i in range(12)]
+    entries.append(_make_entry("project.check_available", capability="precheck"))
+    router = StubSemanticRouter(keyword_bonus={})  # 모든 보너스 0
+    service = RegistryService(
+        entries=entries,
+        minimum_score_threshold=100,  # 절대 통과 불가
+        semantic_router=router,
+    )
+
+    ctx = AgentStepContext(
+        original_user_text="아무 텍스트",
+        executed_operation_ids=("foo.bar",),
+        latest_tool_result_summary="",
+        last_result_success=True,
+        candidate_mode="followup",
+    )
+
+    candidates = service.find_agent_candidates(ctx.original_user_text, step_context=ctx)
+
+    # all_enabled (13개) 전체가 아니라 top-N(5) + always-included 정도로 제한된다
+    assert 0 < len(candidates) < len(entries)
+
