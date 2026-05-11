@@ -236,6 +236,12 @@ def main() -> int:
                             "name": o.name,
                             "passed": o.passed,
                             "failures": list(o.failures),
+                            "executed_operation_ids": list(o.executed_operation_ids),
+                            "final_response": getattr(o.result, "final_response", None) or "",
+                            "status": getattr(o.result, "status", None),
+                            "request_type": getattr(o.result, "request_type", None),
+                            "requires_approval": bool(getattr(o.result, "requires_approval", False)),
+                            "is_ambiguous": bool(getattr(o.result, "is_ambiguous", False)),
                         }
                         for o in report.outcomes
                     ],

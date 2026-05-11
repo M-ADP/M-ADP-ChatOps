@@ -54,6 +54,7 @@ class ScenarioOutcome:
     failures: tuple[str, ...]
     dispatch_delta: int
     result: Any
+    executed_operation_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -350,6 +351,7 @@ class ScenarioRunner:
                     failures=tuple(failures),
                     dispatch_delta=dispatch_delta,
                     result=result,
+                    executed_operation_ids=tuple(executed_ids),
                 )
             )
 
