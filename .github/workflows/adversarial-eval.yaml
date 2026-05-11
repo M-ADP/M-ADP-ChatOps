@@ -1,0 +1,128 @@
+name: Adversarial Eval (LLM-as-Attacker)
+
+on:
+  schedule:
+    # 매주 월요일 00:00 UTC (KST 09:00)
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "페르소나당 생성 시나리오 수"
+        required: false
+        default: "15"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  run-adversarial-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      BEDROCK_MODEL_ID: ${{ secrets.BEDROCK_MODEL_ID }}
+      ATTACKER_MODEL_ID: ${{ vars.ATTACKER_MODEL_ID || 'us.anthropic.claude-haiku-4-5-20251001-v1:0' }}
+      JUDGE_MODEL_ID: ${{ vars.JUDGE_MODEL_ID || 'us.anthropic.claude-haiku-4-5-20251001-v1:0' }}
+      SCENARIO_COUNT: ${{ github.event.inputs.count || '15' }}
+      RUN_DATE: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Set run date
+        run: echo "RUN_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
+
+      - name: Generate adversarial scenarios
+        run: |
+          python scripts/generate_adversarial_scenarios.py \
+            --personas hacker,novice,edge_engineer \
+            --count "$SCENARIO_COUNT" \
+            --output tests/evals/fixtures/adversarial_llm_generated.json
+
+      - name: Run agent eval against generated scenarios
+        run: |
+          python scripts/run_agent_eval.py \
+            --fixture tests/evals/fixtures/adversarial_llm_generated.json \
+            --json-out /tmp/eval_report.json
+
+      - name: Judge eval results
+        run: |
+          python -m chatops.evaluation.adversarial_judge \
+            --report /tmp/eval_report.json \
+            --fixture tests/evals/fixtures/adversarial_llm_generated.json \
+            --out /tmp/judge_verdicts.json
+        env:
+          PYTHONPATH: src
+
+      - name: Promote new findings to regression candidates
+        id: promote
+        run: |
+          python scripts/promote_adversarial_findings.py \
+            --verdicts /tmp/judge_verdicts.json \
+            --fixture tests/evals/fixtures/adversarial_llm_generated.json
+
+      - name: Render report
+        run: |
+          python scripts/render_adversarial_report.py \
+            --report /tmp/eval_report.json \
+            --verdicts /tmp/judge_verdicts.json \
+            --fixture tests/evals/fixtures/adversarial_llm_generated.json \
+            --date "$RUN_DATE"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adversarial-eval-${{ env.RUN_DATE }}
+          path: |
+            /tmp/eval_report.json
+            /tmp/judge_verdicts.json
+            claudedocs/adversarial_eval/${{ env.RUN_DATE }}.md
+            claudedocs/adversarial_eval/${{ env.RUN_DATE }}.json
+            tests/evals/fixtures/adversarial_llm_generated.json
+            tests/evals/fixtures/adversarial_regression_candidates.json
+          retention-days: 90
+
+      - name: Check for attack_succeeded labels
+        id: check_attacks
+        if: always()
+        run: |
+          if [ ! -f /tmp/judge_verdicts.json ]; then
+            echo "has_attacks=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ATTACKS=$(python -c "import json; data = json.load(open('/tmp/judge_verdicts.json')); s = data.get('summary', {}); print(s.get('attack_succeeded', 0) + s.get('partial_leak', 0))")
+          echo "attack_count=$ATTACKS" >> "$GITHUB_OUTPUT"
+          if [ "$ATTACKS" -gt 0 ]; then
+            echo "has_attacks=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_attacks=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open issue on new vulnerabilities
+        if: steps.check_attacks.outputs.has_attacks == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "🚨 Adversarial eval: ${{ steps.check_attacks.outputs.attack_count }} new attack/leak findings (${{ env.RUN_DATE }})" \
+            --body "$(cat claudedocs/adversarial_eval/${{ env.RUN_DATE }}.md)" \
+            --label "security,adversarial-eval"
