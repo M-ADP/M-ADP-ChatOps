@@ -101,6 +101,13 @@ def test_normalize_database_url_uses_installed_psycopg_driver_for_plain_postgres
     )
 
 
+def test_normalize_database_url_replaces_psycopg2_driver() -> None:
+    assert (
+        normalize_database_url("postgresql+psycopg2://user:secret@db.example.com:5432/chatops")
+        == "postgresql+psycopg://user:secret@db.example.com:5432/chatops"
+    )
+
+
 def test_requirements_include_runtime_dependencies() -> None:
     lines = {
         line.strip()

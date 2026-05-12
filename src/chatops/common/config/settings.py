@@ -45,8 +45,8 @@ def load_all_configs() -> None:
 
 def normalize_database_url(raw_value: str) -> str:
     value = raw_value.strip()
-    if value.startswith("postgresql://"):
-        parsed = urlsplit(value)
+    parsed = urlsplit(value)
+    if parsed.scheme in {"postgres", "postgresql", "postgresql+psycopg2"}:
         return urlunsplit(
             (
                 DEFAULT_DATABASE_SCHEME,
