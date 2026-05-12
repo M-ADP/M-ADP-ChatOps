@@ -4,7 +4,12 @@ import pytest
 
 from chatops.common.config.application_server import ApplicationServerConfig
 from chatops.common.config.project_server import ProjectServerConfig
-from chatops.common.config.settings import AppConfig, BedrockConfig, DatabaseConfig
+from chatops.common.config.settings import (
+    AppConfig,
+    BedrockConfig,
+    DatabaseConfig,
+    normalize_database_url,
+)
 from chatops.common.config.user_server import UserServerConfig
 from chatops.config import Settings, resolve_env_file
 from chatops.infra.client.asyncio_http import AioHttpClient
@@ -87,6 +92,13 @@ def test_database_config_preserves_full_database_url() -> None:
     )
 
     assert config.url == expected
+
+
+def test_normalize_database_url_uses_installed_psycopg_driver_for_plain_postgresql_url() -> None:
+    assert (
+        normalize_database_url("postgresql://user:secret@db.example.com:5432/chatops")
+        == "postgresql+psycopg://user:secret@db.example.com:5432/chatops"
+    )
 
 
 def test_requirements_include_runtime_dependencies() -> None:

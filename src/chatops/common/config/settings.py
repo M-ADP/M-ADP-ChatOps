@@ -45,6 +45,17 @@ def load_all_configs() -> None:
 
 def normalize_database_url(raw_value: str) -> str:
     value = raw_value.strip()
+    if value.startswith("postgresql://"):
+        parsed = urlsplit(value)
+        return urlunsplit(
+            (
+                DEFAULT_DATABASE_SCHEME,
+                parsed.netloc,
+                parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
     if "://" in value or value.startswith("sqlite"):
         return value
 
